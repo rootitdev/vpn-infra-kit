@@ -41,7 +41,11 @@ port_free(){ ! ss -Hltn "sport = :$1" | grep -q .; }
 
 phase_preflight(){
   log "preflight (read-only) — mode=$MODE"
-  need EXIT_IP IRAN_IP PASARGUARD_URL PASARGUARD_ADMIN_USER PASARGUARD_ADMIN_PASS
+  need EXIT_IP IRAN_IP PASARGUARD_URL
+  [ -n "${PASARGUARD_API_KEY:-}" ] || need PASARGUARD_ADMIN_USER PASARGUARD_ADMIN_PASS
+  log "local OS: $(. /etc/os-release; echo "$PRETTY_NAME")"
+  log "iran OS: $(on_iran '. /etc/os-release; echo "$PRETTY_NAME"' 2>/dev/null || echo unreachable)"
+  case "${GCORE_DOMAIN:-}" in *.ir) die "GCORE_DOMAIN is a .ir domain — Gcore rejects .ir; use a non-.ir domain";; esac
   if [ "$SPLIT" = 1 ]; then bins="python3 curl ssh nft ss openssl"; else bins="python3 curl ssh docker nft ss openssl"; fi
   for b in $bins; do command -v $b >/dev/null || die "missing binary $b"; done
   if [ "$SPLIT" = 1 ]; then log "split mode: exit=$EXIT_IP (this host), master=$MASTER_IP (panel API only via $PASARGUARD_URL)"
@@ -265,6 +269,13 @@ phase_paths(){
   [ -n "${CF_API_TOKEN:-}" ] && python3 "$RENDERED/scripts/cf_dns.py" --check || true
 }
 
+phase_hosts(){ # subscription hosts (remark HOST_REMARK_TEMPLATE) + attach kit inbounds to PG_GROUPS — add/append only
+  render_tree "$RENDERED"
+  python3 "$KIT_ROOT/master/pg_master.py" hosts
+  confirm "Create the hosts / append the group tags listed above?"
+  python3 "$KIT_ROOT/master/pg_master.py" hosts --yes
+}
+
 phase_panels(){
   [ "$MODE" = master ] && [ "${INSTALL_PANELS:-0}" != 1 ] && { log "master mode: panels skipped (set INSTALL_PANELS=1 to add path-web only)"; return; }
   render_tree "$RENDERED"
@@ -306,7 +317,7 @@ sys.exit(1 if bad else 0)' || warn "some paths failing (see above)"
   systemctl --no-pager --plain list-timers 'vpn-*' | head
 }
 
-PHASES=(preflight gen cert exit iran ctl paths panels failover backup verify)
+PHASES=(preflight gen cert exit iran ctl paths hosts panels failover backup verify)
 if [ $PLAN = 1 ]; then
   phase_preflight
   echo; log "PLAN (nothing applied):"

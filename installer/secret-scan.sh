@@ -20,7 +20,7 @@ for dp,dn,fs in os.walk('.'):
   dn[:]=[d for d in dn if d not in skip]
   for f in fs:
     p=os.path.join(dp,f)
-    if f in('secret-scan.sh','.scan-deny'): continue
+    if f in('secret-scan.sh','.scan-deny','.target-deny'): continue
     try: L=open(p,encoding='utf-8').read().splitlines()
     except Exception: continue
     for i,l in enumerate(L,1):

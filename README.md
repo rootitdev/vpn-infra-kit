@@ -53,7 +53,7 @@ install -d -m 700 /root/.vpn-secrets && cp .env.example /root/.vpn-secrets/.env 
 # fill values (never paste them into chat)
 ./install.sh --plan                      # preflight + full change list, applies nothing
 ./install.sh --phase gen --yes
-for p in exit iran ctl paths failover backup verify; do ./install.sh --phase $p; done
+for p in exit iran ctl paths hosts failover backup verify; do ./install.sh --phase $p; done
 ```
 Rollback: `./rollback.sh --list | --exit --yes | --master-objects --yes | --restore <TS> --yes`.
 Secret scan before every push: `installer/secret-scan.sh` (add your own real domains/IPs to the gitignored `.scan-deny`).
@@ -75,3 +75,10 @@ docs/       ARCHITECTURE.md, legacy/ (original runbooks)
 ```
 ## Not generalized / manual
 See docs/ARCHITECTURE.md → "Known manual steps".
+
+### Hosts & groups (`--phase hosts`)
+`master/pg_master.py hosts` (dry-run) / `hosts --yes`: creates one subscription host per kit inbound, named by
+`HOST_REMARK_TEMPLATE` (e.g. `fk1-VLESS-REALITY`), and APPENDS the kit inbound tags to the groups in `PG_GROUPS`
+(optionally creates them with `PG_GROUP_CREATE=1`). Existing hosts/groups/users are never edited beyond the appended tags;
+everything is recorded for `rollback.sh --master-objects --yes` (which removes only the appended tags, never a group).
+Auth: `PASARGUARD_API_KEY` (pg_key_…, sent as `X-Api-Key`) or admin login.

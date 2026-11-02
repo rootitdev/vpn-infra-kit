@@ -31,7 +31,7 @@ _TOKEN: dict[str, str] = {}
 
 def _auth_headers(env: dict) -> dict:
     """X-Api-Key if PANEL_API_KEY is set, else admin login (Bearer) — master/split mode creates no API key on the master."""
-    key = env.get("PANEL_API_KEY") or ""
+    key = env.get("PANEL_API_KEY") or env.get("PASARGUARD_API_KEY") or ""
     if key:
         return {"X-Api-Key": key}
     if not _TOKEN.get("t"):

@@ -32,7 +32,8 @@ def _req(method, path, token=None, body=None, form=False):
     if body is not None:
         if form: data = urlencode(body).encode(); h["Content-Type"] = "application/x-www-form-urlencoded"
         else: data = json.dumps(body).encode(); h["Content-Type"] = "application/json"
-    if token: h["Authorization"] = f"Bearer {token}"
+    if token and token.startswith("apikey:"): h["X-Api-Key"] = token[7:]
+    elif token: h["Authorization"] = f"Bearer {token}"
     try:
         with urlopen(Request(BASE + path, data=data, headers=h, method=method), timeout=30) as r:
             raw = r.read(); return json.loads(raw) if raw else None
@@ -40,6 +41,8 @@ def _req(method, path, token=None, body=None, form=False):
         sys.stderr.write(f"API {method} {path} -> {e.code}: {e.read().decode(errors='replace')[:800]}\n"); raise
 
 def login():
+    # Temporary panel API key (pg_key_...) preferred: no admin password needed; revoke it after install.
+    if ENV.get("PASARGUARD_API_KEY"): return "apikey:" + ENV["PASARGUARD_API_KEY"]
     r = _req("POST", "/api/admin/token", body={"username": ENV["PASARGUARD_ADMIN_USER"], "password": ENV["PASARGUARD_ADMIN_PASS"]}, form=True)
     return r["access_token"]
 
@@ -82,8 +85,8 @@ def _inline_certs(cfg):
 def desired():
     core_cfg = _inline_certs(json.loads((RENDER / "templates" / "iran-core.json.tmpl").read_text()))
     return {
-        "core": {"name": f"{PREFIX}-iran-core", "config": core_cfg, "exclude_inbound_tags": [], "fallbacks_inbound_tags": []},
-        "node": {"name": f"{PREFIX}-iran", "address": (ENV.get("CTL_NODE_ADDRESS") or (ENV["EXIT_IP"] if ENV.get("EXIT_SPLIT") == "1" else "127.0.0.1") if ENV.get("CTL_MODE", "tunnel") == "tunnel" else ENV["IRAN_IP"]),
+        "core": {"name": ENV.get("PG_CORE_NAME") or f"{PREFIX}-iran-core", "config": core_cfg, "exclude_inbound_tags": [], "fallbacks_inbound_tags": []},
+        "node": {"name": ENV.get("PG_NODE_NAME") or f"{PREFIX}-iran", "address": (ENV.get("CTL_NODE_ADDRESS") or (ENV["EXIT_IP"] if ENV.get("EXIT_SPLIT") == "1" else "127.0.0.1") if ENV.get("CTL_MODE", "tunnel") == "tunnel" else ENV["IRAN_IP"]),
                   "port": int(ENV.get("CTL_LOCAL_PORT", "62051") if ENV.get("CTL_MODE", "tunnel") == "tunnel" else ENV.get("PG_NODE_PORT", "62050")),
                   "api_key": ENV["PG_NODE_API_KEY"], "connection_type": "grpc", "usage_coefficient": 1.0, "keep_alive": 60,
                   "server_ca": _server_ca()},
@@ -140,14 +143,82 @@ def rollback(tok):
     if not STATE_FILE.exists(): sys.exit("nothing recorded; nothing to roll back")
     st = json.loads(STATE_FILE.read_text())
     for obj in reversed(st["created"]):
-        if not obj["name"].startswith(PREFIX): print("refusing non-kit object", obj["name"]); continue
+        if obj["type"] == "group-tags":   # restore only the tags we appended; never delete the group
+            try:
+                g = _req("GET", f"/api/group/{obj['id']}", tok)
+                keep = [t for t in g.get("inbound_tags", []) if t not in obj["added"]]
+                _req("PUT", f"/api/group/{obj['id']}", tok, {"name": g["name"], "inbound_tags": keep, "is_disabled": g.get("is_disabled", False)})
+                print("group", g["name"], "-> removed kit tags", obj["added"])
+            except Exception as e: print("could not restore group", obj["name"], e)
+            continue
         try: _req("DELETE", f"/api/{obj['type']}/{obj['id']}", tok); print("removed", obj["type"], obj["name"])
         except Exception as e: print("could not remove", obj["name"], e)
     STATE_FILE.rename(STATE_FILE.with_suffix(".rolledback.json"))
+
+def _state():
+    return json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {"created": []}
+
+def _save(st):
+    STATE_FILE.write_text(json.dumps(st, indent=2)); os.chmod(STATE_FILE, 0o600)
+
+def _host_plan(tok):
+    """fk1-style hosts: one subscription host per kit inbound, remark = HOST_REMARK_TEMPLATE."""
+    core_cfg = json.loads((RENDER / "templates" / "iran-core.json.tmpl").read_text())
+    tpl = ENV.get("HOST_REMARK_TEMPLATE") or (PREFIX + "-{proto}")
+    addr = ENV.get("HOST_ADDRESS") or ENV.get("IRAN_DOMAIN") or ENV["IRAN_IP"]
+    skip = {t.strip() for t in ENV.get("HOST_SKIP_TAGS", "").split(",") if t.strip()}
+    have = {(h.get("inbound_tag"), h.get("remark")) for h in _list(tok, "/api/hosts")}
+    out = []
+    for i in core_cfg.get("inbounds", []):
+        tag = i.get("tag") or ""
+        if not tag or tag in skip or i.get("protocol") not in ("vless", "vmess", "trojan", "shadowsocks"): continue
+        proto = tag[len(ENV.get("INBOUND_PREFIX", "")):] if tag.startswith(ENV.get("INBOUND_PREFIX", "")) else tag
+        remark = tpl.format(prefix=PREFIX, proto=proto, tag=tag, node=ENV.get("PG_NODE_NAME") or f"{PREFIX}-iran")
+        body = {"remark": remark, "address": [addr], "port": i.get("port"), "inbound_tag": tag, "security": "inbound_default",
+                "priority": int(ENV.get("HOST_PRIORITY", "1")), "is_disabled": False}
+        out.append((body, (tag, remark) in have))
+    return out
+
+def _group_plan(tok):
+    want = [g.strip() for g in ENV.get("PG_GROUPS", "").split(",") if g.strip()]
+    tags = [b["inbound_tag"] for b, _ in _host_plan(tok)]
+    groups = {g.get("name"): g for g in _list(tok, "/api/groups")}
+    plan = []
+    for name in want:
+        g = groups.get(name)
+        if g: plan.append(("append", name, g["id"], [t for t in tags if t not in (g.get("inbound_tags") or [])]))
+        elif ENV.get("PG_GROUP_CREATE", "0") == "1": plan.append(("create", name, None, tags))
+        else: plan.append(("missing", name, None, tags))
+    return plan
+
+def hosts(tok):
+    """hosts [--yes]: create kit hosts + attach kit inbounds to PG_GROUPS (append-only)."""
+    hp = _host_plan(tok); gp = _group_plan(tok)
+    print("== HOSTS / GROUPS PLAN (add-only) ==")
+    for b, exists in hp: print(f"  {'=' if exists else '+'} host  {b['remark']:28} inbound={b['inbound_tag']} {b['address'][0]}:{b['port']}")
+    for act, name, _, t in gp:
+        print({"append": f"  ~ group {name}: append tags {t or '(none, already attached)'}", "create": f"  + group {name} with tags {t}",
+               "missing": f"  ! group {name} not found (set PG_GROUP_CREATE=1 to create it)"}[act])
+    if "--yes" not in sys.argv: print("(dry-run; rerun with --yes)"); return
+    if any(a == "missing" for a, *_ in gp): sys.exit("missing groups; nothing applied")
+    snapshot(tok); st = _state()
+    for b, exists in hp:
+        if exists: continue
+        h = _req("POST", "/api/host", tok, b); st["created"].append({"type": "host", "id": h["id"], "name": b["remark"]}); _save(st)
+        print("created host", b["remark"])
+    for act, name, gid, t in gp:
+        if act == "create":
+            g = _req("POST", "/api/group", tok, {"name": name, "inbound_tags": t, "is_disabled": False})
+            st["created"].append({"type": "group", "id": g["id"], "name": name}); _save(st); print("created group", name)
+        elif act == "append" and t:
+            g = _req("GET", f"/api/group/{gid}", tok)
+            _req("PUT", f"/api/group/{gid}", tok, {"name": g["name"], "inbound_tags": (g.get("inbound_tags") or []) + t, "is_disabled": g.get("is_disabled", False)})
+            st["created"].append({"type": "group-tags", "id": gid, "name": name, "added": t}); _save(st); print("group", name, "+", t)
+    print("users are NOT modified: users in these groups now receive the new hosts in their subscription")
 
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "plan"; tok = login()
     if cmd == "login": print("login ok"); sys.exit(0)
     if cmd != "plan": STATE_DIR.mkdir(parents=True, exist_ok=True)
     if cmd in ("apply", "rollback") and "--yes" not in sys.argv: sys.exit(f"{cmd} requires --yes (run plan first)")
-    {"snapshot": snapshot, "plan": plan, "apply": apply, "rollback": rollback, "refresh-cert": refresh_cert}[cmd](tok)
+    {"snapshot": snapshot, "plan": plan, "apply": apply, "rollback": rollback, "refresh-cert": refresh_cert, "hosts": hosts}[cmd](tok)
