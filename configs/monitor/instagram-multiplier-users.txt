@@ -1,0 +1,6 @@
+# NOT the live list. Do not put panel user ids here.
+# Live file: /etc/vpn-monitor/instagram-multiplier-users.txt
+# Change membership only with:
+#   instagram-multiplier add <username>
+#   instagram-multiplier remove <username>
+#   instagram-multiplier list

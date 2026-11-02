@@ -1,0 +1,5 @@
+[Unit]
+Description=Encrypted VPN config/panel backup
+[Service]
+Type=oneshot
+ExecStart=/root/vpn-infra/scripts/backup-vpn.sh

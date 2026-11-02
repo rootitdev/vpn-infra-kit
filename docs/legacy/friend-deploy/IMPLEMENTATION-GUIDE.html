@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8"/>
+<title>استک VPN دوهاب — راهنمای پیاده‌سازی</title>
+<style>
+  @page { size: A4; margin: 18mm; }
+  body { font-family: DejaVu Sans, Tahoma, sans-serif; font-size: 11pt; line-height: 1.65; color: #111; max-width: 900px; margin: 24px auto; }
+  h1 { font-size: 18pt; margin-top: 1.4em; }
+  h1.file { font-size: 14pt; color: #444; border-bottom: 1px solid #ccc; padding-bottom: .3em; page-break-before: always; }
+  h1.file:first-of-type { page-break-before: avoid; }
+  h2 { font-size: 14pt; margin-top: 1.2em; }
+  h3 { font-size: 12pt; }
+  code, pre { font-family: DejaVu Sans Mono, monospace; font-size: 9pt; direction: ltr; text-align: left; }
+  pre { background: #f4f4f4; padding: 10px; overflow-x: auto; white-space: pre-wrap; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 10pt; }
+  th, td { border: 1px solid #bbb; padding: 6px 8px; vertical-align: top; }
+  th { background: #eee; }
+  hr { border: 0; border-top: 1px solid #ddd; margin: 1.5em 0; }
+  .cover { text-align: center; margin: 2em 0 3em; }
+</style>
+</head>
+<body>
+<div class="cover">
+  <h1>استک VPN دوهاب</h1>
+  <p>راهنمای پیاده‌سازی روی سرور جدید · ۲۴ اوت ۲۰۲۶</p>
+  <p>شامل علت خاموش بودن نود، ۹ مرحله، نصب اسکریپت‌ها، و پرامپت Cursor</p>
+</div>
+<section><h1 class="file">00-README.md</h1><h1>بستهٔ انتقال استک دوهاب برای سرور جدید</h1>
+<p>این پوشه مال <strong>شما</strong> است (داکیومنت + پرامپت + اسکریپت). سکرت و لیست کاربر این استک داخلش نیست.</p>
+<table>
+<tr><th>فایل</th><th>برای کی</th></tr>
+<tr><td><code>CURSOR-PROMPT.md</code></td><td>کپی کامل → دوست → چت Cursor روی سرورهای جدید</td></tr>
+<tr><td><code>IMPLEMENTATION-GUIDE.md</code></td><td>داکیومنت خودتان؛ ۹ مرحله با جزئیات</td></tr>
+<tr><td><code>NODE-DISABLED.md</code></td><td>چرا نود پنل خاموش است و کی می‌شود روشنش کرد</td></tr>
+<tr><td><code>SCRIPTS-INSTALL.md</code></td><td>vpn-path، ضریب اینستا، دیده‌بان <code>/watch/</code>، بقیه</td></tr>
+<tr><td><code>vpn-infra-portable-scripts.tar.gz</code></td><td>بریزید روی سیستم شخصی، بعد بدهید به Cursor دوست</td></tr>
+</table>
+<p>PDF (اگر ساخته شده باشد): <code>IMPLEMENTATION-GUIDE.pdf</code></p>
+<p>روی سیستم شخصی:</p>
+<pre><code>
+tar -tzf vpn-infra-portable-scripts.tar.gz | head
+# کل پوشه docs/friend-deploy را کپی کنید
+</code></pre></section><section><h1 class="file">NODE-DISABLED.md</h1><h1>چرا نود ایران در پنل PasarGuard خاموش است؟</h1>
+<h2>آنچه پنل «طبیعی» می‌خواهد</h2>
+<p>PasarGuard یک ردیف <strong>Node</strong> دارد. اگر آن را Enable کنید:</p>
+<ol>
+<li>پنل از <strong>آلمان</strong> به API نود ایران وصل می‌شود: <code>https://&lt;IP-ایران&gt;:62050/start</code></li>
+<li>کل کانفیگ Xray + همهٔ کاربران را در body می‌فرستد</li>
+<li>نود ایران پروسس <code>xray -c stdin:</code> را با آن JSON بالا می‌آورد</li>
+</ol>
+<p>تا وقتی این مسیر سالم باشد، پنل خودش کاربر جدید را روی ایران اعمال می‌کند و آمار را می‌گیرد. اسکریپت <code>iran-sync-*</code> لازم نیست.</p>
+<h2>چرا در این استک Enable نشد (و خطرناک است)</h2>
+<p>سه واقعیت با هم جمع شدند:</p>
+<ol>
+<li><strong>هستهٔ زنده ایران docker است</strong> (<code>pasarguard/node</code>). JSON روی دیسک <code>/root/.pg_nodes/iran/xray.json</code> را systemd اجرا نمی‌کند. تا <code>/start</code> نخورد، Reality روی <code>:443</code> کانفیگ پنل را ندارد.</li>
+</ol>
+<ol>
+<li><strong>آلمان → ایران <code>:62050</code>:</strong> نود جواب HTTP 200 می‌دهد ولی <strong>body بزرگ است</strong> (کل هسته + کاربران). کلاینت HTTP پنل روی خواندن body <strong>timeout</strong> می‌شود، retry می‌کند، و پنل وضعیت <strong>LockControl</strong> می‌گیرد. نود از نظر UI «خراب» می‌شود در حالی که Xray ممکن است نیمه‌کاره بالا آمده باشد.</li>
+</ol>
+<ol>
+<li><strong>ایران → آلمان پنل روی IP خام / <code>:2096</code>:</strong> DPI بعد از TLS، HTTP را می‌خورد. نود ایران نباید برای سینک به <code>panel:2096</code> عمومی poll کند.</li>
+</ol>
+<p>نتیجهٔ عملی: Enable کردن نود در UI <strong>مسیر رسمی را دوباره باز می‌کند</strong> و همان timeout/LockControl برمی‌گردد. ردیف نود را <strong>پاک نکنید</strong> (تگ اینباند کاربران به همان نود وصل است) — فقط <code>disabled</code> / <code>keep_alive=0</code> بماند.</p>
+<p>جایگزین که الان کار می‌کند:</p>
+<ul>
+<li>آلمان هر ۱۰ث از sqlite پنل protobuf می‌سازد → SCP به ایران</li>
+<li>ایران اگر hash عوض شده (یا <code>:443</code>/<code>:2053</code> خواب است) locally <code>POST https://127.0.0.1:62050/start</code></li>
+<li>آمار را <code>iran-stats</code> با SSH و <code>xray api statsquery</code> به sqlite پنل می‌نویسد — چون نود disabled است پنل خودش usage را نمی‌پرسد</li>
+</ul>
+<h2>روی سرور دوست می‌شود «درست» کرد؟</h2>
+<p><strong>شاید، بعد از اینکه استک با سینک SCP بالا آمد — نه در روز اول.</strong></p>
+<p>تست اجباری از Exit جدید، قبل از هر Enable:</p>
+<pre><code>
+# از آلمان: آیا POST به نود ایران تمام body را بدون timeout برمی‌گرداند؟
+# اگر curl به 62050 در کمتر از مثلاً 20s تمام شود و پنل timeout کوتاه‌تری دارد، باز هم ممکن است Fail شود.
+curl -vk --max-time 60 -o /tmp/node-start.out -w &#x27;http:%{http_code} time:%{time_total}\n&#x27; \
+  --resolve node.example:62050:IRAN_IP \
+  https://node.example:62050/health   # یا هر endpoint سلامت نود
+</code></pre>
+<p>اگر <strong>هر دو</strong> برقرار بود:</p>
+<ul>
+<li>آلمان می‌تواند TCP+TLS+HTTP کامل به <code>:62050</code> ایران بزند (فایروال فقط IP Exit)</li>
+<li>پنل PasarGuard شما timeout بالاتر از زمان واقعی <code>/start</code> دارد (باید با نسخهٔ پنل چک شود)</li>
+</ul>
+<p>آن‌وقت <strong>می‌توان</strong> معماری رسمی را امتحان کرد: Enable نود، <code>iran-sync-export/apply</code> را متوقف کرد، و دید LockControl نمی‌آید.</p>
+<p>اگر تست fail شد (احتمال زیاد وقتی یک سرور ایران و یکی خارج است): <strong>همان طرح فعلی را نگه دارید.</strong> این باگ محصول نیست؛ محدودیت شبکه + timeout کلاینت پنل است. «اصلاح» واقعی یا طولانی‌کردن timeout پنل است یا همین صف SCP.</p>
+<p><strong>قانون پرامپت Cursor دوست:</strong> تا وقتی تست <code>/start</code> از Exit موفق و تکرارپذیر نشده، نود را Enable نکن. ردیف را بساز و disabled بگذار.</p></section><section><h1 class="file">IMPLEMENTATION-GUIDE.md</h1><h1>راهنمای پیاده‌سازی استک VPN دوهاب — ۹ مرحله</h1>
+<p>نسخه: ۲۴ اوت ۲۰۲۶. این سند برای <strong>شما</strong> است تا روی سیستم شخصی نگه دارید. سکرت نمی‌خواهد. IP/دامنهٔ استک فعلی فقط مثال است؛ روی سرور دوست همه را عوض کنید.</p>
+<p><strong>استک فعلی (مثال، کپی نکنید):</strong> رله ایران <code>${IRAN_IP}</code> · Exit آلمان <code>${EXIT_IP}</code> · دامنه‌ها <code>${MAIN_ZONE}</code> / <code>${ALT_ZONE}</code>.</p>
+<p>دو ماشین لازم است. کلاینت به ایران وصل می‌شود؛ اینترنت از آلمان خارج می‌شود. پنل PasarGuard روی Exit است.</p>
+<p>قبل از شروع فایل <code>NODE-DISABLED.md</code> را بخوانید.</p>
+<hr/>
+<h2>مرحله ۱ — دامنه، Cloudflare، گواهی</h2>
+<p><strong>هدف:</strong> نام‌ها resolve شوند و یک گواهی TLS با SAN درست برای پنل، ورود Vision، و بک‌هال XHTTP وجود داشته باشد.</p>
+<p><strong>کارها</strong></p>
+<ol>
+<li>دو دامنه (یا یکی با چند subdomain). از ایران <code>.ir</code> معمولاً بهتر از دامنه‌ای است که DNS-hijack می‌شود.</li>
+<li>هر دو را روی Cloudflare بگذارید. توکن API با حداقل دسترسی Zone DNS (نه account-wide اگر می‌شود).</li>
+<li>تنظیم زون: SSL <strong>Full (Strict)</strong>، <strong>HTTP/3 خاموش</strong> (وگرنه بعضی اندروید <code>ERR_QUIC_PROTOCOL_ERROR</code>).</li>
+<li>رکوردها (نمونه نام؛ IP را مال خودتان بگذارید):</li>
+</ol>
+<p>   - <code>ir.&lt;دامنه&gt;</code> → IP <strong>ایران</strong>، <strong>خاکستری</strong> (ورود Reality/Vision). هرگز نارنجی نکنید.</p>
+<p>   - <code>panel.&lt;دامنه-ایران&gt;</code> → IP <strong>ایران</strong>، <strong>خاکستری</strong> اگر پنل را روی پورت ۲۰۹۶ از ایران می‌خواهید. نارنجی پورت ۲۰۹۶ را رد نمی‌کند.</p>
+<p>   - <code>panel.&lt;دامنه-آلمان&gt;</code> → IP <strong>آلمان</strong>، <strong>نارنجی</strong> برای پنل روی ۴۴۳.</p>
+<p>   - <code>cdn.&lt;دامنه&gt;</code> و <code>xhttp.&lt;دامنه&gt;</code> → IP <strong>آلمان</strong>، <strong>نارنجی</strong> — بک‌هال، ورود کلاینت نیست.</p>
+<ol>
+<li>گواهی Let’s Encrypt با DNS challenge (Cloudflare)، یک cert با SAN همهٔ <code>panel.<em></code> / <code>ir.</em></code> / <code>cdn.<em></code> / <code>xhttp.</em></code>. روی آلمان صادر شود؛ fullchain+privkey به ایران کپی شود (مثلاً <code>/root/.pg_nodes/certs/</code> و <code>/etc/nginx/certs/</code>).</li>
+</ol>
+<p><strong>چک</strong></p>
+<ul>
+<li><code>dig +short ir.دامنه</code> = IP ایران</li>
+<li><code>openssl s_client -connect ir.دامنه:2053 -servername ir.دامنه</code> بعد از مرحله ۴ باید verify شود</li>
+<li>سکرت توکن CF فقط در <code>/root/.vpn-secrets/.env</code> با mode 600</li>
+</ul>
+<hr/>
+<h2>مرحله ۲ — Exit: فایروال، Xray بک‌هال، nginx</h2>
+<p><strong>هدف:</strong> آلمان XHTTP و DIRECT را گوش بدهد؛ پنل روی ۲۰۹۶ و SNI روی ۴۴۳ جدا شود.</p>
+<p><strong>نصب</strong></p>
+<ul>
+<li>Ubuntu 22.04، nftables، SSH فقط کلید</li>
+<li>Xray + <code>geoip.dat</code> / <code>geosite.dat</code></li>
+<li>nginx با ماژول <strong>stream</strong> (<code>ssl_preread</code>)</li>
+</ul>
+<p><strong>کارها</strong></p>
+<ol>
+<li>nftables شبیه <code>configs/nftables-exit.conf</code>:  </li>
+</ol>
+<p>   باز از جهان: <code>22</code>, <code>80</code>, <code>443</code>, <code>2096</code>  </p>
+<p>   فقط از IP ایران: <code>9443</code> TCP و UDP بک‌هال اگر استفاده می‌کنید  </p>
+<p>   <code>127.0.0.1:8000</code> پنل از بیرون دیده نشود.</p>
+<ol>
+<li>Xray Exit (جدا از JSON پنل):</li>
+</ol>
+<p>   - XHTTP روی <strong><code>127.0.0.1:10443</code></strong> (نه <code>:443</code> عمومی) path مثلاً <code>${XHTTP_PATH}</code></p>
+<p>   - DIRECT/Vision+TLS روی <code>:9443</code> فقط برای ایران</p>
+<p>   - outbound <code>PANEL-LOCAL</code> = redirect به <code>127.0.0.1:2096</code> برای دامنهٔ <code>panel.*</code></p>
+<p>   - اختیاری WARP برای گوگل</p>
+<ol>
+<li>nginx stream روی <code>:443</code>: SNI <code>panel.*</code> → <code>127.0.0.1:2096</code>؛ پیش‌فرض → <code>127.0.0.1:10443</code></li>
+<li>nginx http روی <code>:2096</code> TLS → <code>http://127.0.0.1:8000</code> (بعد از مرحله ۳)</li>
+</ol>
+<p><strong>چک</strong></p>
+<ul>
+<li><code>ss -tlnp</code> : nginx <code>:443</code> و <code>:2096</code>؛ xray <code>:10443</code> لوپ‌بک و <code>:9443</code></li>
+<li>از ایران، TCP به <code>:9443</code> آلمان باز باشد؛ از IP غریبه بسته</li>
+</ul>
+<hr/>
+<h2>مرحله ۳ — پنل PasarGuard روی Exit</h2>
+<p><strong>هدف:</strong> UI و sqlite و API روی آلمان؛ هستهٔ <code>iran-xray</code> منبع حقیقت بک‌هال و اینباند کلاینت باشد.</p>
+<p><strong>نصب</strong></p>
+<ul>
+<li>Docker</li>
+<li>تصویر PasarGuard؛ بایند <code>127.0.0.1:8000</code> (نه <code>0.0.0.0</code>)</li>
+<li>دیتابیس پایدار مثلاً <code>/var/lib/pasarguard/</code></li>
+</ul>
+<p><strong>کارها</strong></p>
+<ol>
+<li>پنل را بالا بیاورید؛ ادمین بسازید.</li>
+<li>یک <strong>Core</strong> بسازید (<code>iran-xray</code>) شامل:</li>
+</ol>
+<p>   - inbound <code>VLESS-REALITY</code> پورت ۴۴۳</p>
+<p>   - inbound <code>VLESS-VISION</code> پورت ۲۰۵۳</p>
+<p>   - inbound <code>PANEL-ADMIN</code> SOCKS فقط <code>127.0.0.1:11080</code> (از assignment کاربر خارج)</p>
+<p>   - outboundهای <code>TO-AMS-CF</code> / <code>TO-AMS-XHTTP</code> / <code>TO-AMS-DIRECT</code> (+ TUIC اگر خواستید)</p>
+<p>   - balancer <code>backhaul</code> با selector اولویت CF → XHTTP → DIRECT</p>
+<p>   - قبل از catch-all <code>.ir</code> DIRECT: دامنهٔ <code>panel.*</code> برود <code>backhaul</code> نه DIRECT</p>
+<ol>
+<li><strong>کلاینت داخل JSON هسته خالی</strong> باشد؛ کاربر از UI اضافه می‌شود.</li>
+<li>یک ردیف <strong>Node</strong> برای ایران بسازید (آدرس، پورت API 62050، گواهی نود) ولی <strong>Enable نکنید.</strong> <code>keep_alive=0</code>.</li>
+<li>Hostهای ساب: Reality با آدرس <code>ir.<em></code> و/یا IP ایران پورت ۴۴۳؛ Vision پورت ۲۰۵۳ با SNI <code>ir.</em></code>.</li>
+</ol>
+<p><strong>چک</strong></p>
+<ul>
+<li><code>https://panel.دامنه-آلمان:2096/dashboard/</code> از شبکهٔ غیر ایران یا از روی VPN باز شود</li>
+<li>نود در UI وضعیت disabled</li>
+<li>فایل API key پنل فقط mode 600 روی دیسک؛ در چت نگذارید</li>
+</ul>
+<hr/>
+<h2>مرحله ۴ — رله ایران: node، Reality، Vision</h2>
+<p><strong>هدف:</strong> کلاینت به ایران وصل شود. Xray زنده از docker node است نه از unit قدیمی systemd.</p>
+<p><strong>نصب</strong></p>
+<ul>
+<li>nftables (<code>configs/nftables-iran.conf</code>): TCP <code>22, 443, 2053, 8443, 2096</code>؛ UDP <code>443</code>؛ API نود <code>62050/62051</code> <strong>فقط از IP Exit</strong></li>
+<li>Docker تصویر <code>pasarguard/node</code>، volume مثلاً <code>/var/lib/pg-node</code></li>
+<li>گواهی SAN برای Vision و بعداً nginx پنل</li>
+</ul>
+<p><strong>کارها</strong></p>
+<ol>
+<li>نود را با گواهی و API key مطابق ردیف پنل اجرا کنید؛ <strong>منتظر <code>/start</code> محلی بمانید</strong> (مرحله ۵).</li>
+<li>Reality روی <code>*:443</code> (مال nginx نباشد).</li>
+<li>Vision روی <code>*:2053</code>.</li>
+<li>اسکریپت <code>bootstrap-iran.sh</code> را چشم‌بسته اجرا نکنید؛ فرضش Xray systemd است و با معماری زنده فرق دارد.</li>
+</ol>
+<p><strong>چک</strong></p>
+<ul>
+<li>بعد از اولین apply: <code>ss</code> نشان دهد <code>xray</code> روی <code>:443</code> و <code>:2053</code></li>
+<li>از موبایل ایران یک لینک Reality با fragment (tlshello) وصل شود</li>
+<li><code>openssl s_client</code> به <code>:2053</code> با SNI <code>ir.دامنه</code> گواهی شما را نشان دهد</li>
+</ul>
+<hr/>
+<h2>مرحله ۵ — صفحه کنترل: سینک SCP + apply محلی</h2>
+<p><strong>هدف:</strong> ساخت/حذف کاربر در پنل ظرف ~۲۰ث روی ایران اعمال شود بدون Enable نود.</p>
+<p><strong>کپی از بستهٔ اسکریپت (بازنویسی نکنید)</strong></p>
+<ul>
+<li>Exit: <code>iran_sync_export.py</code>, <code>build_iran_start_proto.py</code>, <code>iran_stats_ingest.py</code> + unitهای <code>iran-sync-export</code> و <code>iran-stats</code></li>
+<li>ایران: <code>iran_sync_apply.py</code> → <code>/usr/local/sbin/iran_sync_apply.py</code> + unit <code>iran-sync-apply</code></li>
+</ul>
+<p><strong>کارها</strong></p>
+<ol>
+<li>SSH کلید از root آلمان به root ایران بدون پسورد (<code>BatchMode=yes</code>).</li>
+<li>در اسکریپت‌ها <code>IRAN=root@&lt;IP-ایران&gt;</code> را عوض کنید.</li>
+<li>Export هر ۱۰ث proto را در <code>/var/lib/pasarguard/iran-sync/</code> می‌سازد؛ اگر hash عوض شد SCP به <code>/var/lib/pg-node/sync/</code></li>
+<li>Apply هر ۱۰ث اگر hash جدید است (یا پورت ۴۴۳/۲۰۵۳ خواب است) <code>POST https://127.0.0.1:62050/start</code></li>
+<li>Stats هر ۳۰ث از ایران <code>statsquery</code> می‌گیرد و <code>used_traffic</code> / <code>online_at</code> را در sqlite می‌نویسد</li>
+<li>Instant Instagram inject داخل export است؛ لیست کاربر را از <code>/etc/vpn-monitor/</code> می‌خواند نه از git</li>
+</ol>
+<p><strong>چک</strong></p>
+<ul>
+<li>یک کاربر تست در پنل → ظرف ۲۰ث در <code>/var/lib/pg-node/generated/xray.json</code> ایران <code>email</code>/id او باشد</li>
+<li>لاگ: Exit <code>/var/log/vpn-path/</code> (اگر اسکریپت همان path را دارد) · ایران sync.log</li>
+<li>نود همچنان disabled</li>
+<li><code>systemctl list-timers</code> هر سه تایمر active</li>
+</ul>
+<hr/>
+<h2>مرحله ۶ — بک‌هال: CF، XHTTP، DIRECT</h2>
+<p><strong>هدف:</strong> ترافیک کاربر از ایران به آلمان برسد. <code>vpn-path</code> روی <strong>آلمان</strong> selector را در هستهٔ پنل عوض می‌کند؛ بعد export همان را به ایران می‌رساند.</p>
+<p><strong>کپی:</strong> کل خانوادهٔ <code>vpn-path</code> + <code>vpn_failover.py</code> + <code>path_health.py</code> + timer failover. IP/دامنه را عوض کنید.</p>
+<p><strong>کارها</strong></p>
+<ol>
+<li>اولویت پیشنهادی: <code>TO-AMS-CF</code> → <code>TO-AMS-XHTTP</code> → <code>TO-AMS-DIRECT</code> (TUIC آخر؛ UDP اغلب از دیتاسنتر ایران فیلتر است)</li>
+<li>نصب: <code>install -m 755 scripts/vpn-path /usr/local/sbin/vpn-path</code></li>
+<li>روی ایران stub بگذارید که بگوید vpn-path را روی Exit بزن (یا status از generated بخواند)</li>
+<li><code>vpn-failover.timer</code> هر ۱۵ث از ایران health بگیرد؛ ۳ شکست پیاپی → مسیر بعدی</li>
+<li>Fragment روی outboundهای TLS بک‌هال (dialerProxy) طبق JSON هسته</li>
+</ol>
+<p><strong>چک از ایران</strong></p>
+<pre><code>
+curl -sS --max-time 20 -x socks5h://127.0.0.1:11080 -o /dev/null -w &#x27;%{http_code}\n&#x27; https://www.google.com/generate_204
+</code></pre>
+<p>روی Exit: <code>vpn-path status</code> و <code>vpn-path test</code></p>
+<p>اگر CF فیلتر شد: <code>vpn-path xhttp</code> یا <code>direct</code>.</p>
+<hr/>
+<h2>مرحله ۷ — پروکسی پنل روی ایران (لینک ساب بدون تغییر)</h2>
+<p><strong>هدف:</strong> کلاینت‌های ایران همان URL ذخیره‌شده <code>https://panel.&lt;دامنه&gt;:2096/sub/&lt;token&gt;</code> را باز کنند؛ DNS به IP ایران باشد.</p>
+<p><strong>کپی:</strong> <code>configs/nginx-iran-subproxy.conf</code> + snippets، <code>xray-subproxy.json</code>، <code>xray-subproxy.service</code>، nft پورت ۲۰۹۶.</p>
+<p><strong>کارها</strong></p>
+<ol>
+<li>nginx ایران listen <code>2096</code> و <code>8443</code> با همان گواهی SAN</li>
+<li><code>proxy_pass</code> به <code>https://127.0.0.1:10444</code> (dokodemo)</li>
+<li>dokodemo مقصدش دامنه‌ای باشد که <strong>بعد از عوض شدن DNS پنل ایران حلقه نزند</strong> — در استک فعلی <code>${PANEL_DOMAIN}:2096</code> (آن یکی روی آلمان ماند)</li>
+<li>Host هدر همان hostname لینک کلاینت</li>
+<li><code>location /</code> کل پنل را پروکسی کنید (نه فقط <code>/dashboard/</code>) چون اسکریپت‌ها زیر <code>/statics/</code>اند</li>
+<li>DNS <code>panel.&lt;دامنه-ایران&gt;</code> خاکستری به IP ایران</li>
+</ol>
+<p><strong>چک از خود ایران</strong></p>
+<pre><code>
+curl -sS -o /dev/null -w &#x27;%{http_code}\n&#x27; --resolve panel.دامنه:2096:127.0.0.1 https://panel.دامنه:2096/dashboard/
+# باید 200 و HTML شامل /statics/ باشد
+</code></pre>
+<p>از آلمان به IP ایران <code>:2096</code> ممکن است HTTP بعد از TLS hang شود؛ کلاینت هدف نت ایران است.</p>
+<hr/>
+<h2>مرحله ۸ — سه ابزار عملیاتی + بقیهٔ اسکریپت‌ها</h2>
+<p>نصب جزئی در <code>SCRIPTS-INSTALL.md</code>. خلاصه:</p>
+<table>
+<tr><th>ابزار</th><th>کجا</th><th>کار</th></tr>
+<tr><td><strong>vpn-path</strong></td><td>Exit</td><td>تعویض دستی/اتومات بک‌هال</td></tr>
+<tr><td><strong>instagram-multiplier</strong></td><td>Exit CLI + inject در export</td><td>ضریب حجم اینستا برای چند یوزر</td></tr>
+<tr><td><strong>sni-watch</strong> (<code>/watch/</code>)</td><td>ایران سرویس + Exit تونل SSH + nginx <code>/watch/</code></td><td>گزارش SNI کلاینت‌های انتخابی</td></tr>
+</table>
+<p>همین مرحله مانیتور (<code>scripts/monitor/install.sh exit|iran</code>) را هم می‌توانید نصب کنید.</p>
+<p><strong>چک</strong></p>
+<ul>
+<li><code>vpn-path status</code> روی آلمان</li>
+<li><code>instagram-multiplier list</code> روی آلمان</li>
+<li><code>https://panel.…:2096/watch/</code> با لاگین جدا از پنل</li>
+</ul>
+<hr/>
+<h2>مرحله ۹ — کلاینت واقعی، بکاپ، سخت‌گیری</h2>
+<p><strong>کارها</strong></p>
+<ol>
+<li>ساب را روی v2rayNG / v2rayN / iOS تست کنید (MCI شب اوج). Reality fragment روشن.</li>
+<li>SSH آلمان را به IP ادمین محدود کنید اگر می‌شود.</li>
+<li>بکاپ رمزشدهٔ پنل+کانفیگ (در این استک <code>backup-vpn.sh</code> + GPG).</li>
+<li>توکن‌هایی که در چت آمده‌اند rotate.</li>
+<li>Quota/مانیتور تلگرام اختیاری است (BotFather روی موبایل شما).</li>
+</ol>
+<p><strong>چک نهایی</strong></p>
+<ul>
+<li>کلاینت ایران اینترنت دارد</li>
+<li>ساب از <code>panel.*:2096</code> روی نت ایران ۲۰۰ می‌دهد</li>
+<li>نود پنل هنوز disabled</li>
+<li>Reality روی ۴۴۳ ایران هنوز xray است نه nginx</li>
+<li><code>ir.*</code> DNS دست‌نخورده روی IP ایران</li>
+</ul>
+<hr/>
+<h2>چیزهایی که هرگز از استک فعلی کپی نکنید</h2>
+<ul>
+<li><code>/root/.vpn-secrets/.env</code> و هر UUID / کلید Reality / توکن CF / API پنل</li>
+<li><code>/etc/vpn-monitor/instagram-multiplier-users.txt</code> (لیست زندهٔ کاربر)</li>
+<li>sqlite پنل و بکاپ رمزنشده</li>
+<li>IPهای نت‌کاپ/شتابان به‌عنوان پیش‌فرض دائمی داخل کانفیگ دوست (جایگزین کنید)</li>
+</ul></section><section><h1 class="file">SCRIPTS-INSTALL.md</h1><h1>اسکریپت‌ها: چیست، کجا نصب می‌شود، چطور</h1>
+<p>بسته: <code>vpn-infra-portable-scripts.tar.gz</code> — بدون <code>__pycache__</code>، بدون لیست کاربر اینستا، بدون <code>.env</code> سکرت.</p>
+<p>قبل از نصب روی سرور جدید این رشته‌ها را در فایل‌ها عوض کنید:</p>
+<ul>
+<li><code>${IRAN_IP}</code> → IP رله ایران جدید</li>
+<li><code>${EXIT_IP}</code> → IP Exit جدید</li>
+<li><code>root@${IRAN_IP}</code> → <code>root@&lt;ایران&gt;</code></li>
+<li>دامنه‌های <code>${MAIN_ZONE}</code> / <code>${ALT_ZONE}</code> / <code>${EXTRA_ZONE}</code> → دامنهٔ دوست</li>
+<li>مسیر <code>/root/vpn-infra</code> اگر ریپو جای دیگری است</li>
+</ul>
+<p>فرض این سند: کد روی هر دو سرور در <code>/root/vpn-infra/</code> است.</p>
+<hr/>
+<h2>۱) vpn-path (شما نوشتید vpn-patch — همان است)</h2>
+<p><strong>کار:</strong> مسیر بک‌هال را در <strong>هستهٔ پنل</strong> عوض می‌کند (<code>TO-AMS-CF</code> / <code>XHTTP</code> / <code>DIRECT</code> / <code>TUIC</code> / <code>auto</code>). منبع حقیقت JSON هسته است نه فایل systemd ایران.</p>
+<p><strong>کجا:</strong> فقط <strong>Exit (آلمان)</strong>. روی ایران اگر چیزی به نام vpn-path باشد، stub است.</p>
+<p><strong>فایل‌ها</strong></p>
+<pre><code>
+scripts/vpn-path                 → /usr/local/sbin/vpn-path
+scripts/vpn-path-core.py
+scripts/vpn_path_lib.py
+scripts/vpn_paths.py
+scripts/vpn-path-iran-stub.sh    → ایران /usr/local/sbin/vpn-path (اختیاری)
+scripts/path_health.py           → سلامت از دید ایران (failover صدا می‌زند)
+scripts/vpn_failover.py
+configs/vpn-failover.service
+configs/vpn-failover.timer
+</code></pre>
+<p><strong>نصب Exit</strong></p>
+<pre><code>
+install -m 755 /root/vpn-infra/scripts/vpn-path /usr/local/sbin/vpn-path
+install -m 644 /root/vpn-infra/configs/vpn-failover.service \
+               /root/vpn-infra/configs/vpn-failover.timer /etc/systemd/system/
+# vpn_path_lib از /root/vpn-infra/scripts ایمپورت می‌شود — ریپو باید همان‌جا باشد
+# یا PYTHONPATH را در unit مشخص کنید
+mkdir -p /var/log/vpn-path
+systemctl daemon-reload
+systemctl enable --now vpn-failover.timer
+vpn-path status
+</code></pre>
+<p>دستورات: <code>vpn-path status|auto|cf|xhttp|direct|tuic|publish|test</code></p>
+<p><strong>نصب ایران (stub)</strong></p>
+<pre><code>
+install -m 755 /root/vpn-infra/scripts/vpn-path-iran-stub.sh /usr/local/sbin/vpn-path
+</code></pre>
+<p>وابستگی: پنل Docker، <code>PG_CORE_ID</code> و API در <code>/root/.vpn-secrets/.env</code>، SSH به ایران برای health/publish.</p>
+<hr/>
+<h2>۲) instagram-multiplier</h2>
+<p><strong>کار:</strong> برای چند user id پنل، ترافیک دامنه‌های اینستاگرام جدا شمرده می‌شود و با ضریب (پیش‌فرض ۱٫۵) به <code>used_traffic</code> اضافه می‌شود. اتصال را قطع نمی‌کند؛ outbound کلون همان بک‌هال است.</p>
+<p><strong>کجا:</strong> CLI و inject روی <strong>Exit</strong>. قوانین CAT روی Xray <strong>ایران</strong> می‌نشینند (وسط export).</p>
+<p><strong>فایل‌ها</strong></p>
+<pre><code>
+scripts/instagram-multiplier     → /usr/local/sbin/instagram-multiplier
+scripts/instagram_multiplier.py
+configs/monitor/instagram-multiplier.env  → /etc/vpn-monitor/instagram-multiplier.env
+# لیست کاربر را نسازید از استک ما؛ خالی شروع کنید:
+# /etc/vpn-monitor/instagram-multiplier-users.txt
+</code></pre>
+<p>حتماً <code>iran_sync_export.py</code> (مرحله inject) و <code>iran_stats_ingest.py</code> (وزن‌دهی آمار) هم از بسته نصب شوند وگرنه CLI تنها لیست را عوض می‌کند و روی هسته اثر ندارد.</p>
+<p><strong>نصب Exit</strong></p>
+<pre><code>
+mkdir -p /etc/vpn-monitor
+chmod 700 /etc/vpn-monitor
+install -m 755 /root/vpn-infra/scripts/instagram-multiplier /usr/local/sbin/instagram-multiplier
+cp /root/vpn-infra/configs/monitor/instagram-multiplier.env /etc/vpn-monitor/
+chmod 600 /etc/vpn-monitor/instagram-multiplier.env
+cat &gt; /etc/vpn-monitor/instagram-multiplier-users.txt &lt;&lt; &#x27;EOF&#x27;
+# Panel user ids, one per line. Comments allowed.
+EOF
+chmod 600 /etc/vpn-monitor/instagram-multiplier-users.txt
+</code></pre>
+<p><strong>استفاده</strong></p>
+<pre><code>
+instagram-multiplier add &lt;username-پنل&gt;
+instagram-multiplier remove &lt;username&gt;
+instagram-multiplier list
+</code></pre>
+<p>بعد از add، export همان لحظه زده می‌شود. لاگ وزن: <code>/var/log/vpn-path/stats.log</code> فیلدهای <code>u&lt;id&gt;_ig=</code>.</p>
+<p>لیست را در git نگذارید.</p>
+<hr/>
+<h2>۳) sni-watch — صفحه <code>https://panel…:2096/watch/</code></h2>
+<p><strong>کار:</strong> محتوای HTTPS را نمی‌خواند. از access log Xray فقط <strong>hostname (SNI)</strong> را با فهرست دامنه مقایسه می‌کند. لاگین جدا از PasarGuard.</p>
+<p><strong>کجا:</strong> سرویس روی <strong>ایران</strong> (همان‌جا که کلاینت وصل می‌شود و <code>email:</code> در لاگ id پنل است). روی Exit فقط تونل SSH و reverse-proxy nginx و resolve نام→id.</p>
+<p><strong>فایل‌ها</strong></p>
+<pre><code>
+scripts/sni-watch/install.sh
+scripts/sni-watch/app.py
+scripts/sni-watch/adult-domains.txt
+scripts/sni-watch/sni-watch.service
+scripts/sni-watch/xray-stdin-wrap.*
+scripts/sni-watch/ensure_xray_wrap.sh
+scripts/sni-watch/resolve_watchlist.py
+configs/sni-watch/sni-watch-tunnel.service   # Exit: ssh -L 8787
+configs/sni-watch/sni-watch-resolve.timer
+configs/nginx-panel.conf   # قطعه location /watch/
+</code></pre>
+<p>لاگ خام نود IP کلاینت است نه SNI کافی؛ wrap روی <code>xray -c stdin:</code> لاگ <code>sni-access.log</code> می‌سازد.</p>
+<p><strong>نصب ایران</strong></p>
+<pre><code>
+cd /root/vpn-infra/scripts/sni-watch
+sudo AUTH_USER=watch AUTH_PASS=&#x27;رمز-قوی&#x27; ./install.sh
+# listen پیش‌فرض 127.0.0.1:8787 — پورت را به جهان باز نکنید
+# wrap:
+# scripts/sni-watch/ensure_xray_wrap.sh را طبق docs/sni-watch.md بعد از بالا آمدن node اجرا کنید
+</code></pre>
+<p>رمز در <code>/etc/sni-watch/admin.pass</code> (mode 600).</p>
+<p><strong>نصب Exit</strong></p>
+<ol>
+<li>در nginx پنل (<code>:2096</code>):</li>
+</ol>
+<pre><code>
+location = /watch { return 301 /watch/; }
+location /watch/ {
+    proxy_pass http://127.0.0.1:8787/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_read_timeout 60;
+}
+</code></pre>
+<ol>
+<li>تونل: در <code>sni-watch-tunnel.service</code> IP ایران را عوض کنید، بعد:</li>
+</ol>
+<pre><code>
+install -m 644 /root/vpn-infra/configs/sni-watch/sni-watch-tunnel.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now sni-watch-tunnel.service
+</code></pre>
+<ol>
+<li>resolve نام کاربری (اختیاری ولی لازم برای UI):</li>
+</ol>
+<pre><code>
+install -m 644 /root/vpn-infra/configs/sni-watch/sni-watch-resolve.service \
+               /root/vpn-infra/configs/sni-watch/sni-watch-resolve.timer /etc/systemd/system/
+systemctl enable --now sni-watch-resolve.timer
+</code></pre>
+<p>صفحه: <code>https://panel.&lt;دامنه&gt;:2096/watch/</code> — مستندات داخلی: <code>/watch/docs</code></p>
+<hr/>
+<h2>۴) اسکریپت‌های دیگر که باید منتقل شوند (بازنویسی نکنید)</h2>
+<p>این‌ها «ابزار سوم» نیستند؛ ستون فقرات کنترل‌پلین‌اند. بدون این‌ها پنل کاربر را به ایران نمی‌رساند.</p>
+<table>
+<tr><th>اسکریپت / unit</th><th>سرور</th><th>کار</th></tr>
+<tr><td><code>iran_sync_export.py</code></td><td>Exit</td><td>ساخت proto از sqlite + SCP</td></tr>
+<tr><td><code>build_iran_start_proto.py</code></td><td>داخل container پنل (export کپی می‌کند)</td><td>protobuf Backend</td></tr>
+<tr><td><code>iran_sync_apply.py</code></td><td>ایران</td><td>localhost <code>/start</code></td></tr>
+<tr><td><code>iran_stats_ingest.py</code></td><td>Exit</td><td>آمار Xray ایران → sqlite</td></tr>
+<tr><td><code>iran-sync-*.timer/service</code></td><td>هر کدام روی سرور خودش</td><td>هر ۱۰ث</td></tr>
+<tr><td><code>iran-stats.timer/service</code></td><td>Exit</td><td>هر ۳۰ث</td></tr>
+<tr><td><code>cf_dns.py</code></td><td>Exit</td><td>upsert DNS کلادفلر</td></tr>
+<tr><td><code>panel-via-backhaul</code></td><td>ایران</td><td>helper دسترسی پنل از SOCKS</td></tr>
+<tr><td>nginx + <code>xray-subproxy.*</code></td><td>ایران</td><td>پروکسی پنل ۲۰۹۶</td></tr>
+<tr><td><code>scripts/monitor/install.sh</code></td><td>هر دو</td><td>ظرفیت/هارد/سهمیه/گوگل</td></tr>
+<tr><td><code>backup-vpn.sh</code></td><td>Exit</td><td>بکاپ</td></tr>
+<tr><td><code>sshd-key-only.sh</code></td><td>هر دو</td><td>قطع پسورد SSH</td></tr>
+<tr><td><code>render_iran_configs.py</code> / <code>render_exit_configs.py</code></td><td>یک‌بار</td><td>قالب JSON از سکرت؛ IP داخلشان مثال است</td></tr>
+<tr><td><code>pg_bootstrap_panel.py</code></td><td>یک‌بار</td><td>موجودیت اولیه پنل</td></tr>
+<tr><td><code>netcup_oauth.py</code></td><td>فقط اگر سرور نت‌کاپ دارید</td><td>به استک دوست مربوط نیست مگر همان ISP</td></tr>
+</table>
+<p><strong>نصب سینک (خلاصه)</strong></p>
+<p>Exit:</p>
+<pre><code>
+install -m 644 /root/vpn-infra/configs/iran-sync-export.service \
+               /root/vpn-infra/configs/iran-sync-export.timer \
+               /root/vpn-infra/configs/iran-stats.service \
+               /root/vpn-infra/configs/iran-stats.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now iran-sync-export.timer iran-stats.timer
+</code></pre>
+<p>ایران:</p>
+<pre><code>
+install -m 755 /root/vpn-infra/scripts/iran_sync_apply.py /usr/local/sbin/iran_sync_apply.py
+install -m 644 /root/vpn-infra/configs/iran-sync-apply.service \
+               /root/vpn-infra/configs/iran-sync-apply.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now iran-sync-apply.timer
+</code></pre>
+<p>مانیتور:</p>
+<pre><code>
+# روی آلمان:
+/root/vpn-infra/scripts/monitor/install.sh exit
+# روی ایران:
+/root/vpn-infra/scripts/monitor/install.sh iran
+# NETCUP_* را اگر سرور نت‌کاپ نیست از config.env حذف/خالی کنید
+</code></pre>
+<hr/>
+<h2>۵) آنچه نباید به‌عنوان «اسکریپت آماده» کپی شود</h2>
+<ul>
+<li><code>bootstrap-iran.sh</code> — با docker node زنده سازگار نیست مگر بازنویسی شود</li>
+<li>لیست اینستاگرام زنده</li>
+<li>هر فایل داخل <code>/root/.vpn-secrets/</code></li>
+<li><code>__pycache__</code></li>
+</ul></section><section><h1 class="file">CURSOR-PROMPT.md</h1><h1>پرامپت Cursor برای پیاده‌سازی استک VPN دوهاب</h1>
+<p>این متن را <strong>کامل</strong> در چت Cursor روی سرورهای جدید پیست کنید. پوشهٔ <code>vpn-infra-portable-scripts.tar.gz</code> و این داکیومنت‌ها را هم به workspace بدهید (extract کنید به <code>/root/vpn-infra</code> یا مسیر واحد دیگر).</p>
+<p>از استک قبلی <strong>هیچ سکرتی</strong> کپی نکنید: UUID، کلید Reality، توکن Cloudflare، API پنل، پسورد، sqlite، لیست کاربر اینستاگرام.</p>
+<hr/>
+<p>شما یک مهندس زیرساخت هستید. باید <strong>همین معماری</strong> را روی دو سرور خالی پیاده کنید، نه یک VPN تک‌سروره و نه بازنویسی اسکریپت‌های آماده.</p>
+<h2>معماری اجباری (عوض نکنید مگر تست شبکه خلافش را ثابت کند)</h2>
+<p>دو هاپ:</p>
+<pre><code>
+کلاینت در ایران
+  → رله ایران: VLESS Reality TCP 443 + VLESS Vision TCP 2053
+  → بک‌هال به Exit: اولویت TO-AMS-CF (XHTTP پشت Cloudflare) سپس TO-AMS-XHTTP سپس TO-AMS-DIRECT (VLESS+TLS روی پورت 9443 فقط از IP ایران)
+  → Exit خارج: خروج اینترنت (اختیاری WARP برای گوگل)
+</code></pre>
+<p>کلاینت به Exit وصل نمی‌شود. Reality روی ایران <code>:443</code> است؛ آن پورت را nginx نکنید.</p>
+<p>پنل <strong>PasarGuard</strong> فقط روی Exit، bind به <code>127.0.0.1:8000</code>. nginx Exit TLS روی <code>:2096</code>. روی Exit پورت <code>443</code> عمومی nginx <strong>stream ssl_preread</strong> است: SNI دامنهٔ پنل → <code>127.0.0.1:2096</code>؛ بقیه → XHTTP روی <code>127.0.0.1:10443</code> (Xray Exit روی 443 عمومی listen نکند).</p>
+<p>هستهٔ JSON پنل (core ایران) از هستهٔ Xray Exit جدا است. پنل را به JSON بک‌هال Exit وصل نکنید.</p>
+<h3>نود پنل — قانون سخت</h3>
+<p>یک ردیف Node برای ایران در پنل بسازید (API معمولاً <code>:62050</code>) ولی <strong>Enable نکنید</strong>؛ <code>keep_alive=0</code>.</p>
+<p>علت: POST آلمان→ایران <code>/start</code> در عمل 200 می‌دهد ولی body بزرگ timeout می‌شود و پنل LockControl می‌گیرد. Xray زنده ایران فقط وقتی کانفیگ می‌گیرد که <strong>خود ایران</strong> <code>POST https://127.0.0.1:62050/start</code> بزند.</p>
+<p>جایگزین اجباری در روز اول:</p>
+<ul>
+<li>Exit هر ~۱۰ث: <code>iran_sync_export.py</code> از sqlite protobuf می‌سازد، اگر hash عوض شد SCP به ایران <code>/var/lib/pg-node/sync/</code></li>
+<li>ایران هر ~۱۰ث: <code>iran_sync_apply.py</code> اگر hash جدید است یا <code>:443</code>/<code>:2053</code> خواب است، localhost <code>/start</code></li>
+<li>Exit هر ~۳۰ث: <code>iran_stats_ingest.py</code> با SSH <code>xray api statsquery</code> روی ایران و نوشتن <code>used_traffic</code> در sqlite</li>
+</ul>
+<p>ردیف Node را حذف نکنید. تا وقتی از Exit، POST کامل به <code>:62050</code> ایران بدون timeout تکرارپذیر نشده، Enable نکنید. جزئیات در <code>docs/friend-deploy/NODE-DISABLED.md</code>.</p>
+<p>ایران هرگز برای سینک نود به <code>https://panel:2096</code> روی IP عمومی Exit وصل نشود (DPI بعد از TLS). دسترسی انسان به پنل از ایران از مسیر بک‌هال / پروکسی محلی است.</p>
+<h2>دامنه و Cloudflare</h2>
+<p>از اپراتور بپرسید: دو IP (ایران و Exit)، نام دامنه‌ها، توکن CF.</p>
+<p>زون: SSL Full Strict، HTTP/3 خاموش.</p>
+<ul>
+<li><code>ir.&lt;دامنه&gt;</code> A به IP ایران، <strong>DNS only (خاکستری)</strong>. ورود VPN. نارنجی ممنوع.</li>
+<li><code>panel.&lt;دامنه&gt;</code> اگر پورت 2096 از ایران می‌خواهید: A به IP ایران، خاکستری.</li>
+<li>یک <code>panel.*</code> برای Exit می‌تواند نارنجی باشد (فقط 80/443).</li>
+<li><code>cdn.<em></code> / <code>xhttp.</em></code> نارنجی به IP Exit — بک‌هال نه ورود کلاینت.</li>
+</ul>
+<p>گواهی Let’s Encrypt یک cert با SAN همهٔ این نام‌ها. گواهی جدید الکی نگیرید اگر SAN کافی است.</p>
+<p>از ایران بعضی دامنه‌ها DNS-hijack می‌شوند؛ با <code>dig @8.8.8.8</code> از رله چک کنید.</p>
+<h2>اسکریپت‌های آماده — بازنویسی ممنوع</h2>
+<p>در workspace بستهٔ portable هست. این فایل‌ها را از نو ننویسید. فقط IP، دامنه، مسیر ریپو (<code>/root/vpn-infra</code>) و unitهای systemd را با محیط جدید تطبیق دهید:</p>
+<p>خانوادهٔ vpn-path، instagram-multiplier + instagram_multiplier.py، کل <code>scripts/sni-watch/</code>، <code>iran_sync_export.py</code>، <code>iran_sync_apply.py</code>، <code>build_iran_start_proto.py</code>، <code>iran_stats_ingest.py</code>، <code>vpn_failover.py</code>، <code>path_health.py</code>، <code>cf_dns.py</code>، کانفیگ‌های <code>configs/iran-sync-<em></code>، <code>iran-stats-</em></code>، <code>vpn-failover-<em></code>، <code>xray-subproxy</em></code>، nginx ایران subproxy، nftables، monitor.</p>
+<p><code>bootstrap-iran.sh</code> را چشم‌بسته اجرا نکنید (فرض Xray systemd دارد؛ زنده docker node است).</p>
+<p>نصب این سه ابزار طبق <code>docs/friend-deploy/SCRIPTS-INSTALL.md</code>:</p>
+<ol>
+<li><strong>vpn-path</strong> روی Exit → <code>/usr/local/sbin/vpn-path</code> + <code>vpn-failover.timer</code></li>
+<li><strong>instagram-multiplier</strong> روی Exit → <code>/usr/local/sbin/instagram-multiplier</code> + <code>/etc/vpn-monitor/</code> (لیست کاربر را خالی شروع کنید؛ از استک قدیمی کپی نکنید). بدون export/stats بی‌فایده است.</li>
+<li><strong>sni-watch</strong> صفحهٔ <code>/watch/</code> روی همان TLS پنل <code>:2096</code>: سرویس روی ایران <code>127.0.0.1:8787</code>، تونل SSH از Exit، <code>location /watch/</code> در nginx. wrap لاگ Xray برای SNI لازم است.</li>
+</ol>
+<p>مانیتور: <code>scripts/monitor/install.sh exit</code> و <code>iran</code>. کلیدهای NETCUP را اگر ISP فرق دارد حذف کنید.</p>
+<h2>بک‌هال و پنل از ایران</h2>
+<p>در routing ایران، قبل از قانون DIRECT برای <code>geosite:category-ir</code> / <code><em>.ir</code>، دامنهٔ <code>panel.</em></code> باید برود balancer <code>backhaul</code>. روی Exit همان نام‌ها outbound <code>PANEL-LOCAL</code> → <code>127.0.0.1:2096</code>.</p>
+<p>SOCKS ادمین روی ایران: <code>127.0.0.1:11080</code> inbound <code>PANEL-ADMIN</code>، localhost-only، جزء کاربران پنل نباشد.</p>
+<p>پروکسی شفاف پنل روی ایران: nginx <code>:2096</code> + <code>:8443</code>، upstream <code>127.0.0.1:10444</code> (xray-subproxy → SOCKS → بک‌هال). مقصد dokodemo باید دامنه‌ای باشد که DNS-اش روی خود ایران حلقه نزند. کل <code>location /</code> را پروکسی کنید (<code>/statics/</code>، <code>/api/</code>، <code>/sub/</code>) وگرنه داشبورد سفید است. <code>proxy_ssl_verify off</code> روی لوپ‌بک. nft TCP 2096 باز.</p>
+<h2>فایروال (حداقل)</h2>
+<p>ایران: TCP 22, 443, 2053, 8443, 2096؛ UDP 443؛ 62050/62051 فقط از IP Exit.</p>
+<p>Exit: TCP 22, 80, 443, 2096 از جهان؛ 9443 و UDP بک‌هال فقط از IP ایران؛ پنل 8000 از بیرون بسته.</p>
+<h2>ترتیب پیاده‌سازی (۹ مرحله — جزئیات در IMPLEMENTATION-GUIDE.md)</h2>
+<ol>
+<li>دامنه + CF + گواهی SAN  </li>
+<li>Exit: nft، Xray بک‌هال، nginx stream 443 + http 2096  </li>
+<li>Docker PasarGuard؛ core ایران؛ Node ردیف disabled  </li>
+<li>ایران: docker node، Reality 443، Vision 2053  </li>
+<li>SSH کلید؛ iran-sync-export/apply؛ iran-stats؛ نود Enable نشود  </li>
+<li>تست بک‌هال CF سپس XHTTP سپس DIRECT؛ نصب vpn-path  </li>
+<li>nginx/xray-subproxy ایران 2096؛ DNS panel به ایران اگر لینک ساب همان است  </li>
+<li>instagram-multiplier + sni-watch + monitor  </li>
+<li>تست کلاینت واقعی (Reality fragment در اپ)، بکاپ، محدود کردن SSH  </li>
+</ol>
+<p>هر مرحله را تمام و تست کنید بعد بروید بعدی. سکرت را در چت چاپ نکنید. git commit نکنید مگر کاربر بخواهد. نود ایران را Enable نکنید.</p>
+<h2>تحویل آخر</h2>
+<p>گزارش بدهید: IP و دامنهٔ نهایی (بدون سکرت)، وضعیت نود (باید disabled باشد)، خروجی <code>vpn-path status</code>، تست ساب و داشبورد، Reality هنوز روی 443 ایران، بک‌هال کدام تگ است، کدام اسکریپت از بسته بدون بازنویسی نصب شد.</p>
+<p>اگر چیزی در بسته با IP قدیمی باقی ماند، لیست مسیر فایل‌هایی که جایگزین کردید.</p></section>
+</body>
+</html>

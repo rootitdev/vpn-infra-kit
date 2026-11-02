@@ -1,0 +1,5 @@
+[Unit]
+Description=Ensure Xray stdin wrap for SNI access log
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /usr/local/sbin/ensure_xray_wrap.sh

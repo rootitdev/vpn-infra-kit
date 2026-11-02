@@ -1,0 +1,6 @@
+[Unit]
+Description=Export PasarGuard desired state for Iran Xray
+After=docker.service
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /root/vpn-infra/scripts/iran_sync_export.py

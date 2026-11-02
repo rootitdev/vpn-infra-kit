@@ -1,0 +1,8 @@
+[Unit]
+Description=Run VPN health check every 2 minutes
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=120s
+AccuracySec=10s
+[Install]
+WantedBy=timers.target

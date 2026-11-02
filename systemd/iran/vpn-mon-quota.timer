@@ -1,0 +1,8 @@
+[Unit]
+Description=VPN monitor quota every 30 min
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=30min
+AccuracySec=30s
+[Install]
+WantedBy=timers.target

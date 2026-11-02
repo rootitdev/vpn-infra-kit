@@ -1,0 +1,14 @@
+[Unit]
+Description=PasarGuard Node
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+WorkingDirectory=/var/lib/pg-node
+EnvironmentFile=/var/lib/pg-node/.env
+ExecStart=/usr/local/bin/pasarguard-node
+Restart=on-failure
+RestartSec=2
+LimitNOFILE=1048576
+[Install]
+WantedBy=multi-user.target

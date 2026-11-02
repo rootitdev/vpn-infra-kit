@@ -1,0 +1,8 @@
+[Unit]
+Description=VPN monitor Google check every 6h
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=6h
+AccuracySec=1min
+[Install]
+WantedBy=timers.target

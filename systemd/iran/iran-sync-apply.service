@@ -1,0 +1,8 @@
+[Unit]
+Description=Apply dropped PasarGuard proto to local node /start
+After=docker.service network-online.target
+Wants=docker.service network-online.target
+[Service]
+Type=oneshot
+TimeoutStartSec=40
+ExecStart=/usr/bin/python3 /usr/local/sbin/iran_sync_apply.py

@@ -1,0 +1,42 @@
+{
+  "log": {
+    "loglevel": "warning"
+  },
+  "inbounds": [
+    {
+      "tag": "local-panel-fwd",
+      "listen": "127.0.0.1",
+      "port": 10444,
+      "protocol": "dokodemo-door",
+      "settings": {
+        "address": "${PANEL_DOMAIN}",
+        "port": 2096,
+        "network": "tcp"
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "via-panel-socks",
+      "protocol": "socks",
+      "settings": {
+        "servers": [
+          {
+            "address": "127.0.0.1",
+            "port": 11080
+          }
+        ]
+      }
+    }
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      {
+        "type": "field",
+        "network": "tcp",
+        "outboundTag": "via-panel-socks"
+      }
+    ]
+  }
+}

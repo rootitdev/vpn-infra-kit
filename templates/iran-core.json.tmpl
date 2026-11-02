@@ -1,0 +1,437 @@
+{
+  "log": {
+    "loglevel": "warning",
+    "access": "/var/log/xray/access.log",
+    "error": "/var/log/xray/error.log"
+  },
+  "inbounds": [
+    {
+      "tag": "${INBOUND_PREFIX}VLESS-REALITY",
+      "listen": "0.0.0.0",
+      "port": 443,
+      "protocol": "vless",
+      "settings": {
+        "clients": [],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "dest": "dl.google.com:443",
+          "xver": 0,
+          "serverNames": [
+            "${REALITY_CLIENT_SNI}"
+          ],
+          "privateKey": "${REALITY_CLIENT_PRIVATE_KEY}",
+          "shortIds": [
+            "${REALITY_CLIENT_SHORT_ID}"
+          ],
+          "fingerprint": "chrome"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
+        "routeOnly": false
+      }
+    },
+    {
+      "tag": "${INBOUND_PREFIX}VLESS-VISION",
+      "listen": "0.0.0.0",
+      "port": 2053,
+      "protocol": "vless",
+      "settings": {
+        "clients": [],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "tls",
+        "tlsSettings": {
+          "certificates": [
+            {
+              "certificateFile": "/root/.pg_nodes/certs/fullchain.pem",
+              "keyFile": "/root/.pg_nodes/certs/privkey.pem"
+            }
+          ],
+          "alpn": [
+            "h2",
+            "http/1.1"
+          ]
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
+        "routeOnly": false
+      }
+    },
+    {
+      "tag": "${INBOUND_PREFIX}PANEL-ADMIN",
+      "listen": "127.0.0.1",
+      "port": 11080,
+      "protocol": "socks",
+      "settings": {
+        "udp": true,
+        "auth": "noauth"
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
+        "routeOnly": true
+      }
+    },
+    {
+      "tag": "${INBOUND_PREFIX}VLESS-WS",
+      "listen": "0.0.0.0",
+      "port": 2083,
+      "protocol": "vless",
+      "settings": {
+        "clients": [],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "certificates": [
+            {
+              "certificateFile": "/root/.pg_nodes/certs/fullchain.pem",
+              "keyFile": "/root/.pg_nodes/certs/privkey.pem"
+            }
+          ],
+          "alpn": [
+            "http/1.1"
+          ]
+        },
+        "wsSettings": {
+          "path": "${XHTTP_PATH}",
+          "headers": {}
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
+        "routeOnly": false
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "TO-AMS-CF",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "${CF_GRAY_DOMAIN}",
+            "port": 443,
+            "users": [
+              {
+                "id": "${XRAY_BRIDGE_UUID}",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "${CF_GRAY_DOMAIN}",
+          "fingerprint": "chrome",
+          "alpn": [
+            "h2",
+            "http/1.1"
+          ]
+        },
+        "xhttpSettings": {
+          "path": "${XHTTP_PATH}",
+          "mode": "auto",
+          "host": "${CF_GRAY_DOMAIN}"
+        }
+      }
+    },
+    {
+      "tag": "TO-AMS-CFORANGE",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "${CFORANGE_DOMAIN}",
+            "port": 443,
+            "users": [
+              {
+                "id": "${XRAY_BRIDGE_UUID}",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "${CFORANGE_DOMAIN}",
+          "fingerprint": "chrome",
+          "alpn": [
+            "h2",
+            "http/1.1"
+          ]
+        },
+        "xhttpSettings": {
+          "path": "${XHTTP_PATH}",
+          "mode": "auto",
+          "host": "${CFORANGE_DOMAIN}"
+        }
+      }
+    },
+    {
+      "tag": "TO-AMS-DIRECT",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "${EXIT_IP}",
+            "port": 9443,
+            "users": [
+              {
+                "id": "${XRAY_BRIDGE_UUID}",
+                "encryption": "none",
+                "flow": "xtls-rprx-vision"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "${CF_GRAY_DOMAIN}",
+          "fingerprint": "chrome",
+          "alpn": [
+            "h2",
+            "http/1.1"
+          ]
+        }
+      }
+    },
+    {
+      "tag": "TO-AMS-REALITY",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "${EXIT_IP}",
+            "port": 8444,
+            "users": [
+              {
+                "id": "${XRAY_BRIDGE_UUID}",
+                "encryption": "none",
+                "flow": "xtls-rprx-vision"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "serverName": "${REALITY_SERVER_NAME}",
+          "fingerprint": "chrome",
+          "publicKey": "${REALITY_PUBLIC_KEY}",
+          "shortId": "${REALITY_SHORT_ID}",
+          "spiderX": "/"
+        }
+      }
+    },
+    {
+      "tag": "TO-AMS-XHTTP",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "${XHTTP_DOMAIN}",
+            "port": 443,
+            "users": [
+              {
+                "id": "${XRAY_BRIDGE_UUID}",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "${XHTTP_DOMAIN}",
+          "fingerprint": "chrome",
+          "alpn": [
+            "h2",
+            "http/1.1"
+          ]
+        },
+        "xhttpSettings": {
+          "path": "${XHTTP_PATH}",
+          "mode": "auto",
+          "host": "${XHTTP_DOMAIN}"
+        }
+      }
+    },
+    {
+      "tag": "TO-AMS-GCORE",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "${GCORE_DOMAIN}",
+            "port": 443,
+            "users": [
+              {
+                "id": "${XRAY_BRIDGE_UUID}",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "${GCORE_DOMAIN}",
+          "fingerprint": "chrome",
+          "alpn": [
+            "h2",
+            "http/1.1"
+          ]
+        },
+        "xhttpSettings": {
+          "path": "${XHTTP_PATH}",
+          "mode": "auto",
+          "host": "${GCORE_DOMAIN}"
+        }
+      }
+    },
+    {
+      "tag": "TO-AMS-BUNNY",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "${BUNNY_DOMAIN}",
+            "port": 443,
+            "users": [
+              {
+                "id": "${XRAY_BRIDGE_UUID}",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "${BUNNY_DOMAIN}",
+          "fingerprint": "chrome",
+          "alpn": [
+            "h2",
+            "http/1.1"
+          ]
+        },
+        "xhttpSettings": {
+          "path": "${XHTTP_PATH}",
+          "mode": "auto",
+          "host": "${BUNNY_DOMAIN}"
+        }
+      }
+    },
+    {
+      "tag": "DIRECT",
+      "protocol": "freedom",
+      "settings": {
+        "domainStrategy": "UseIP"
+      }
+    },
+    {
+      "tag": "BLOCK",
+      "protocol": "blackhole"
+    },
+    {
+      "tag": "API",
+      "protocol": "freedom"
+    }
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      {
+        "type": "field",
+        "domain": [
+          "geosite:category-ir",
+          "regexp:.*\\.ir$"
+        ],
+        "outboundTag": "DIRECT"
+      },
+      {
+        "type": "field",
+        "ip": [
+          "geoip:ir"
+        ],
+        "outboundTag": "DIRECT"
+      },
+      {
+        "type": "field",
+        "domain": [
+          "full:${PANEL_DOMAIN}",
+          "full:${PANEL_DOMAIN_ALT}",
+          "full:${PANEL_DOMAIN_EXTRA}"
+        ],
+        "outboundTag": "TO-AMS-DIRECT"
+      },
+      {
+        "type": "field",
+        "network": "tcp,udp",
+        "outboundTag": "TO-AMS-REALITY"
+      }
+    ]
+  },
+  "policy": {
+    "levels": {
+      "0": {
+        "statsUserUplink": true,
+        "statsUserDownlink": true,
+        "statsUserOnline": true
+      }
+    },
+    "system": {
+      "statsOutboundUplink": true,
+      "statsOutboundDownlink": true
+    }
+  }
+}

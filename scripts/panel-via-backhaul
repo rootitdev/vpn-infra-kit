@@ -1,0 +1,4 @@
+#!/bin/bash
+# Reach the PasarGuard UI/API from Iran through Xray backhaul, not direct :2096.
+# Usage: panel-via-backhaul https://${PANEL_DOMAIN}:2096/dashboard/
+exec curl -k --socks5-hostname 127.0.0.1:11080 "$@"

@@ -1,0 +1,15 @@
+[Unit]
+Description=TUIC client backhaul to Exit
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/tuic-client -c /root/.pg_nodes/iran/tuic-client.json
+Restart=always
+RestartSec=3
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

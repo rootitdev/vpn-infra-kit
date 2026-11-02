@@ -1,0 +1,10 @@
+[Unit]
+Description=VPN monitor: verify critical services after boot
+After=network-online.target docker.service
+Wants=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/vpn-monitor/boot_verify.py
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target

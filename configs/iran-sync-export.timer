@@ -1,0 +1,8 @@
+[Unit]
+Description=Export Iran desired-state every 10s
+[Timer]
+OnBootSec=15s
+OnUnitActiveSec=10s
+AccuracySec=2s
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,8 @@
+[Unit]
+Description=Iran Xray stats ingest every 30s
+[Timer]
+OnBootSec=40s
+OnUnitInactiveSec=30s
+AccuracySec=3s
+[Install]
+WantedBy=timers.target

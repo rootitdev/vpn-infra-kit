@@ -1,0 +1,13 @@
+.env
+*.env
+!.env.example
+*.pem
+*.key
+*.gpg
+*.db
+*.sqlite*
+__pycache__/
+state/
+backups/
+rendered/
+.scan-deny

@@ -1,0 +1,5 @@
+[Unit]
+Description=Resolve sni-watch names to panel user ids
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /root/vpn-infra/scripts/sni-watch/resolve_watchlist.py

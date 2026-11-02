@@ -1,0 +1,8 @@
+[Unit]
+Description=VPN monitor capacity every 1 min
+[Timer]
+OnBootSec=70s
+OnUnitActiveSec=60s
+AccuracySec=5s
+[Install]
+WantedBy=timers.target

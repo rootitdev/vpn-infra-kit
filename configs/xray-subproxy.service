@@ -1,0 +1,15 @@
+[Unit]
+Description=Xray SOCKS forwarder for Iran subscription reverse proxy
+After=network.target
+# SOCKS 127.0.0.1:11080 is the main Iran xray PANEL-ADMIN inbound.
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/xray run -config /usr/local/etc/xray-subproxy.json
+Restart=always
+RestartSec=2
+LimitNOFILE=65535
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

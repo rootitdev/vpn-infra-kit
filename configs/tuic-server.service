@@ -1,0 +1,16 @@
+[Unit]
+Description=TUIC backhaul server
+After=network-online.target xray.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/tuic-server -c /etc/tuic/config.toml
+Restart=always
+RestartSec=3
+LimitNOFILE=1048576
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

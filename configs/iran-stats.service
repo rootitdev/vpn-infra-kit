@@ -1,0 +1,6 @@
+[Unit]
+Description=Pull Iran Xray usage stats into panel DB
+After=docker.service
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /root/vpn-infra/scripts/iran_stats_ingest.py
