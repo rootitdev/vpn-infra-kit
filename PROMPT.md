@@ -2,7 +2,7 @@
 
 ---
 
-You are setting up my VPN tunnel stack from the PRIVATE GitHub repo `<OWNER>/vpn-infra-kit` (branch `main`).
+You are setting up my VPN tunnel stack from the PRIVATE GitHub repo `rootitdev/vpn-infra-kit` (branch `main`).
 Read `README.md`, `docs/ARCHITECTURE.md`, `.env.example`, `install.sh`, `rollback.sh` and `master/pg_master.py` in full before doing anything.
 
 ## Goal
