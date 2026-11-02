@@ -24,16 +24,17 @@ KXRAY_DIR=/opt/vpn-infra-kit/exit; KXRAY_UNIT="${KIT_PREFIX}-exit-xray"
 #   - XHTTP origin: kit xray serves TLS directly on XHTTP_ORIGIN_PORT (no nginx, no 443 sharing with the existing node);
 #     CF orange needs an Origin Rule (dest port -> XHTTP_ORIGIN_PORT); Gcore/Bunny origins use https://EXIT_IP:XHTTP_ORIGIN_PORT
 #   - kit uses its own xray binary in $KXRAY_DIR/bin (existing node's xray/container never touched)
+: "${TLS_CERT_FILE:=/root/.pg_nodes/certs/fullchain.pem}" "${TLS_KEY_FILE:=/root/.pg_nodes/certs/privkey.pem}"; export TLS_CERT_FILE TLS_KEY_FILE
 SPLIT="${EXIT_SPLIT:-0}"; export CF_GRAY_PORT="${CF_GRAY_PORT:-443}"
 if [ "$SPLIT" = 1 ]; then
   need MASTER_IP EXIT_IP
   export CTL_LISTEN=0.0.0.0 CTL_NODE_ADDRESS="$EXIT_IP" XHTTP_BRIDGE_PORT="${XHTTP_ORIGIN_PORT:-10443}" CF_GRAY_PORT="${XHTTP_ORIGIN_PORT:-10443}"
 fi
 kxray(){ if [ "$SPLIT" = 1 ]; then echo "$KXRAY_DIR/bin/xray"; else command -v xray || echo /root/.pg_nodes/bin/xray; fi; }
-ensure_kxray(){ [ "$SPLIT" = 1 ] || return 0; [ -x "$KXRAY_DIR/bin/xray" ] && return 0
+ensure_kxray(){ [ "$SPLIT" = 1 ] || return 0; [ -x "$KXRAY_DIR/bin/xray" ] && [ -s "$KXRAY_DIR/bin/geoip.dat" ] && return 0
   mkdir -p "$KXRAY_DIR/bin"; local t; t=$(mktemp -d)
   curl -fsSL -o "$t/x.zip" "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION:-v25.10.15}/Xray-linux-64.zip"
-  (cd "$t" && python3 -c 'import zipfile;zipfile.ZipFile("x.zip").extractall(".")') && install -m 755 "$t/xray" "$KXRAY_DIR/bin/xray"; rm -rf "$t"; }
+  (cd "$t" && python3 -c 'import zipfile;zipfile.ZipFile("x.zip").extractall(".")') && install -m 755 "$t/xray" "$KXRAY_DIR/bin/xray" && install -m 644 "$t/geoip.dat" "$t/geosite.dat" "$KXRAY_DIR/bin/"; rm -rf "$t"; }
 [ "$PLAN" = 1 ] || { mkdir -p "$STATE_DIR"; chmod 700 "$STATE_DIR"; }   # --plan writes nothing
 
 port_free(){ ! ss -Hltn "sport = :$1" | grep -q .; }
@@ -55,7 +56,7 @@ phase_preflight(){
   XR=$(command -v xray || ls /root/.pg_nodes/bin/xray 2>/dev/null || true); [ "$SPLIT" = 1 ] || { [ -n "$XR" ] && log "xray binary: $XR"; } || warn "no xray binary on this host — phase gen/exit need one (install xray-core standalone; master's panel container is NOT used)"
   [ "$SPLIT" = 1 ] || command -v nginx >/dev/null && log "nginx present or not needed (split: xray serves origin TLS on ${XHTTP_ORIGIN_PORT:-10443})" || warn "nginx absent — phase exit will NOT create the XHTTP/CDN origin on 443; CDN paths (xhttp/gcore/bunny/cf) stay dead until an origin is set up"
   [ -f "${TLS_CERT_FILE:-/nonexistent}" ] && log "TLS cert present" || warn "TLS cert ${TLS_CERT_FILE:-} missing — needed for XHTTP/DIRECT origin"
-  docker ps --format '{{.Names}} {{.Image}}' | sed 's/^/  container: /'
+  command -v docker >/dev/null && docker ps --format '{{.Names}} {{.Image}}' | sed 's/^/  container: /' || true
   for p in "${REALITY_PORT}" "${XHTTP_BRIDGE_PORT}" "${DIRECT_TLS_PORT}" "${SOCKS_TEST_PORT}"; do
     if port_free "$p"; then log "port $p free"; elif systemctl is-active -q "$KXRAY_UNIT"; then log "port $p held by our $KXRAY_UNIT (ok)"; else warn "port $p IN USE on master — pick another in .env"; fi; done
   ss -Hltn "sport = :443" | grep -q . && log "443 already served (nginx stream/sni will be extended, not replaced)"
@@ -82,12 +83,12 @@ phase_gen(){
 phase_cert(){ # split mode: origin cert for the CDN/gray hostnames via acme.sh DNS-01 (Cloudflare); no port 80 needed
   [ "$SPLIT" = 1 ] || { log "cert: non-split uses existing TLS_CERT_FILE"; return; }
   need ACME_EMAIL; local tok="${CF_DNS_TOKEN:-${CF_API_TOKEN:-}}"; [ -n "$tok" ] || die "CF_DNS_TOKEN (or CF_API_TOKEN) required for DNS-01"
-  local doms=() d; for d in "${XHTTP_DOMAIN:-}" "${CF_GRAY_DOMAIN:-}" "${CFORANGE_DOMAIN:-}" "${GCORE_DOMAIN:-}" "${BUNNY_DOMAIN:-}"; do [ -n "$d" ] && doms+=(-d "$d"); done
+  local doms=() d; for d in "${IRAN_DOMAIN:-}" "${XHTTP_DOMAIN:-}" "${CF_GRAY_DOMAIN:-}" "${CFORANGE_DOMAIN:-}" "${GCORE_DOMAIN:-}" "${BUNNY_DOMAIN:-}"; do [ -n "$d" ] && doms+=(-d "$d"); done
   [ ${#doms[@]} -gt 0 ] || die "no CDN hostnames set"
   [ -x /root/.acme.sh/acme.sh ] || curl -fsSL https://get.acme.sh | sh -s email="$ACME_EMAIL" >/dev/null
   mkdir -p "$(dirname "$TLS_CERT_FILE")"; chmod 700 "$(dirname "$TLS_CERT_FILE")"
-  CF_Token="$tok" /root/.acme.sh/acme.sh --issue --dns dns_cf --server letsencrypt "${doms[@]}" --keylength ec-256 || [ $? = 2 ]
-  /root/.acme.sh/acme.sh --install-cert -d "${doms[1]}" --ecc --fullchain-file "$TLS_CERT_FILE" --key-file "$TLS_KEY_FILE" --reloadcmd "systemctl restart $KXRAY_UNIT 2>/dev/null || true"
+  CF_Token="$tok" /root/.acme.sh/acme.sh --issue --dns dns_cf --server letsencrypt "${doms[@]}" --keylength ec-256 ${CERT_FORCE:+--force} || [ $? = 2 ]
+  /root/.acme.sh/acme.sh --install-cert -d "${doms[1]}" --ecc --fullchain-file "$TLS_CERT_FILE" --key-file "$TLS_KEY_FILE" --reloadcmd "systemctl restart $KXRAY_UNIT 2>/dev/null; [ '$MODE' = master ] && ENV_FILE=$ENV_FILE python3 $KIT_ROOT/master/pg_master.py refresh-cert >/dev/null 2>&1 || true"
 }
 
 phase_exit(){
@@ -106,7 +107,7 @@ P
   if [ "${CTL_MODE:-tunnel}" = tunnel ]; then   # control link: portal + local-only entry on our OWN xray
     python3 "$KIT_ROOT/ctl/gen_ctl.py" "$RENDERED/templates/iran-core.json.tmpl" "$KXRAY_DIR/xray.json" "$KXRAY_DIR/iran-ctl.json"
   fi
-  ensure_kxray; XR=$(kxray); [ "$SPLIT" = 1 ] && python3 - "$KXRAY_DIR/xray.json" <<'P2'
+  mkdir -p /var/log/xray; ensure_kxray; XR=$(kxray); [ "$SPLIT" = 1 ] && python3 - "$KXRAY_DIR/xray.json" <<'P2'
 import json,sys
 c=json.load(open(sys.argv[1]))
 for i in c['inbounds']:
@@ -143,7 +144,8 @@ table inet ${KIT_PREFIX}_exit {
 }
 N
     nft list table inet ${KIT_PREFIX}_exit > /etc/nftables.d-${KIT_PREFIX}_exit.nft 2>/dev/null || true
-    warn "nft table inet ${KIT_PREFIX}_exit loaded (runtime); persist: include /etc/nftables.d-${KIT_PREFIX}_exit.nft from /etc/nftables.conf (operator review)"
+    grep -q "${KIT_PREFIX}_exit" /etc/nftables.conf 2>/dev/null || echo "include \"/etc/nftables.d-${KIT_PREFIX}_exit.nft\"" >> /etc/nftables.conf
+    nft -c -f /etc/nftables.conf && systemctl enable -q nftables && log "nft table ${KIT_PREFIX}_exit persisted" || warn "nft persist check failed — table is runtime-only"
   elif ! nft list ruleset | grep -q "vpn-infra-kit:$KIT_PREFIX"; then
     fam_tab_chain=$(nft -a list ruleset | awk '/^table/{t=$2" "$3} /chain input/{print t" input"; exit}')
     if [ -n "$fam_tab_chain" ]; then
@@ -174,25 +176,43 @@ N
 }
 
 phase_iran(){
-  log "iran: pg-node container + config (Iran host is dedicated to this kit)"
+  log "iran: native pasarguard-node (no docker; Iran host is dedicated to this kit)"
   render_tree "$RENDERED"
-  iran_backup /etc/nginx /etc/nftables.conf /var/lib/pg-node /etc/systemd/system/pg-node.service
-  on_iran "mkdir -p /usr/local/sbin /var/lib/pg-node/sync /root/.pg_nodes/certs"
+  iran_backup /etc/nftables.conf /var/lib/pg-node /etc/systemd/system/pg-node.service
+  on_iran "mkdir -p /usr/local/sbin /usr/local/share/xray /var/lib/pg-node/sync /var/lib/pg-node/certs"
   to_iran "$RENDERED/iran/sbin/." /usr/local/sbin/
   to_iran "$RENDERED/scripts/path_health.py" /usr/local/sbin/path_health.py
   to_iran "$RENDERED/scripts/vpn_paths.py" /usr/local/sbin/vpn_paths.py
-  to_iran "$RENDERED/systemd/iran/." /etc/systemd/system/
-  on_iran "chmod 755 /usr/local/sbin/*; command -v docker >/dev/null || (curl -fsSL https://get.docker.com | sh)"
-  on_iran "cat > /etc/default/pg-node <<X
+  to_iran "$RENDERED/systemd/iran/pg-node.service" /etc/systemd/system/pg-node.service
+  on_iran "chmod 755 /usr/local/sbin/*"
+  # binaries fetched on the Exit (GitHub/Docker may be filtered or sanctioned from Iran) and copied over
+  local t; t=$(mktemp -d)
+  curl -fsSL -o "$t/n.zip" "https://github.com/PasarGuard/node/releases/download/${PG_NODE_VERSION:-v0.5.6}/pasarguard-node-linux-amd64.zip"
+  (cd "$t" && python3 -c 'import zipfile;zipfile.ZipFile("n.zip").extractall(".")')
+  nb=$(find "$t" -maxdepth 2 -type f -name 'pasarguard-node*' ! -name '*.zip' | head -1); [ -n "$nb" ] || die "pasarguard-node binary not in zip"
+  ensure_kxray; on_iran "systemctl is-active -q pg-node && systemctl stop pg-node || true"
+  to_iran "$nb" /usr/local/bin/pasarguard-node; to_iran "$(kxray)" /usr/local/bin/xray
+  to_iran "$KXRAY_DIR/bin/geoip.dat" /usr/local/share/xray/geoip.dat; to_iran "$KXRAY_DIR/bin/geosite.dat" /usr/local/share/xray/geosite.dat
+  rm -rf "$t"; on_iran "chmod 755 /usr/local/bin/pasarguard-node /usr/local/bin/xray"
+  # node TLS cert (self-signed; panel pins it as server_ca). SANs cover the ctl entry on the Exit and loopback.
+  on_iran "cd /var/lib/pg-node/certs && [ -s ssl_cert.pem ] || openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 \
+    -keyout ssl_key.pem -out ssl_cert.pem -subj /CN=${KIT_PREFIX}-node -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1,IP:${IRAN_IP},IP:${EXIT_IP}' 2>/dev/null; chmod 600 ssl_key.pem"
+  on_iran "cat /var/lib/pg-node/certs/ssl_cert.pem" > "$STATE_DIR/iran-node-cert.pem"; chmod 600 "$STATE_DIR/iran-node-cert.pem"
+  on_iran "umask 077; cat > /var/lib/pg-node/.env <<X
 API_KEY=$PG_NODE_API_KEY
 SERVICE_PORT=$PG_NODE_PORT
 SERVICE_PROTOCOL=grpc
 NODE_HOST=$( [ "${CTL_MODE:-tunnel}" = tunnel ] && [ "${CTL_DIRECT_FALLBACK:-0}" != 1 ] && echo 127.0.0.1 || echo 0.0.0.0 )
-SSL_CERT_FILE=/root/.pg_nodes/certs/fullchain.pem
-SSL_KEY_FILE=/root/.pg_nodes/certs/privkey.pem
+SSL_CERT_FILE=/var/lib/pg-node/certs/ssl_cert.pem
+SSL_KEY_FILE=/var/lib/pg-node/certs/ssl_key.pem
+XRAY_EXECUTABLE_PATH=/usr/local/bin/xray
+XRAY_ASSETS_PATH=/usr/local/share/xray
+GENERATED_CONFIG_PATH=/var/lib/pg-node/generated
 X
-chmod 600 /etc/default/pg-node; docker image inspect $PG_NODE_IMAGE >/dev/null 2>&1 || docker pull $PG_NODE_IMAGE"
-  on_iran "systemctl daemon-reload; systemctl enable -q pg-node && (systemctl is-active -q pg-node || systemctl start pg-node)"
+systemctl daemon-reload; systemctl enable -q pg-node; systemctl restart pg-node; sleep 2; systemctl is-active pg-node"
+  # path_health.py probes outbounds from generated/xray.json; native pg-node feeds xray via stdin, so ship the rendered core
+  on_iran "mkdir -p /var/lib/pg-node/generated && chmod 700 /var/lib/pg-node/generated"
+  to_iran "$RENDERED/templates/iran-core.json.tmpl" /var/lib/pg-node/generated/xray.json; on_iran "chmod 600 /var/lib/pg-node/generated/xray.json"
   phase_ctl
 }
 
@@ -211,6 +231,7 @@ table inet ${KIT_PREFIX}_ctl {
   }
 }
 N"
+  on_iran "nft list table inet ${KIT_PREFIX}_ctl > /etc/nftables.d-${KIT_PREFIX}_ctl.nft; grep -q ${KIT_PREFIX}_ctl /etc/nftables.conf || echo 'include \"/etc/nftables.d-${KIT_PREFIX}_ctl.nft\"' >> /etc/nftables.conf; nft -c -f /etc/nftables.conf && systemctl enable -q nftables"
   [ "${CTL_MODE:-tunnel}" = tunnel ] || { log "direct control link: panel -> ${IRAN_IP}:${PG_NODE_PORT} (EXIT_IP only)"; return; }
   [ -f "$KXRAY_DIR/iran-ctl.json" ] || die "run --phase exit first (generates iran-ctl.json)"
   on_iran "mkdir -p /opt/vpn-infra-kit && chmod 700 /opt/vpn-infra-kit"
@@ -273,10 +294,10 @@ phase_verify(){
 import json,sys
 d=json.load(sys.stdin); bad=0
 for t,v in (d.get("paths") or d).items():
-    ok=v.get("ok"); bad+= (not ok); print(f"  {t:18} {\"OK \" if ok else \"FAIL\"} {v.get(\"code\",\"\")} {v.get(\"ms\",\"\")}ms {v.get(\"err\",\"\")[:60]}")
+    ok=v.get("ok"); bad+= (not ok); print("  %-18s %s %s %sms %s" % (t, "OK  " if ok else "FAIL", v.get("http") or v.get("code") or "", v.get("ms",""), str(v.get("err",""))[:60]))
 sys.exit(1 if bad else 0)' || warn "some paths failing (see above)"
   on_iran "curl -s -o /dev/null -w 'tunnel %{http_code} %{time_total}s\n' -x socks5h://127.0.0.1:11080 https://www.gstatic.com/generate_204" || warn "end-to-end tunnel test failed"
-  [ "$MODE" = master ] && { python3 "$KIT_ROOT/master/pg_master.py" plan | grep -E "untouched|BLOCK" ; }
+  [ "$MODE" = master ] && { python3 "$KIT_ROOT/master/pg_master.py" plan | grep -E "untouched" ; }   # post-install the kit objects exist (expected), so only show the untouched counts
   if [ "${CTL_MODE:-tunnel}" = tunnel ]; then
     timeout 5 bash -c "</dev/tcp/${CTL_LISTEN:-127.0.0.1}/${CTL_LOCAL_PORT:-62051}" && log "ctl entry ${CTL_LOCAL_PORT} open on Exit" || warn "ctl entry port not listening"
     on_iran "systemctl is-active ${KIT_PREFIX}-ctl-bridge; ss -Hltn 'sport = :${PG_NODE_PORT}' | awk '{print \$4}'" | sed 's/^/  iran: /'

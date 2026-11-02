@@ -26,16 +26,34 @@ def load_env() -> dict[str, str]:
     return env
 
 
-def req(method: str, path: str, env: dict, body: dict | None = None):
+_TOKEN: dict[str, str] = {}
+
+
+def _auth_headers(env: dict) -> dict:
+    """X-Api-Key if PANEL_API_KEY is set, else admin login (Bearer) — master/split mode creates no API key on the master."""
     key = env.get("PANEL_API_KEY") or ""
-    if not key:
-        raise SystemExit("missing PANEL_API_KEY")
+    if key:
+        return {"X-Api-Key": key}
+    if not _TOKEN.get("t"):
+        from urllib.parse import urlencode
+        base = (env.get("PASARGUARD_URL") or "http://127.0.0.1:8000").rstrip("/")
+        user, pw = env.get("PASARGUARD_ADMIN_USER"), env.get("PASARGUARD_ADMIN_PASS")
+        if not (user and pw):
+            raise SystemExit("missing PANEL_API_KEY or PASARGUARD_ADMIN_USER/PASS")
+        r = Request(base + "/api/admin/token", data=urlencode({"username": user, "password": pw}).encode(),
+                    headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": "vpn-infra-kit/1.0"})
+        with urlopen(r, timeout=30) as resp:
+            _TOKEN["t"] = json.loads(resp.read())["access_token"]
+    return {"Authorization": "Bearer " + _TOKEN["t"]}
+
+
+def req(method: str, path: str, env: dict, body: dict | None = None):
     data = None if body is None else json.dumps(body).encode()
     r = Request(
         f"{(env.get('PASARGUARD_URL') or 'http://127.0.0.1:8000').rstrip('/')}{path}",
         data=data,
         method=method,
-        headers={"X-Api-Key": key, "Content-Type": "application/json", "User-Agent": "vpn-infra-kit/1.0"},
+        headers={**_auth_headers(env), "Content-Type": "application/json", "User-Agent": "vpn-infra-kit/1.0"},
     )
     with urlopen(r, timeout=30) as resp:
         raw = resp.read()
@@ -58,7 +76,9 @@ def put_core(env: dict, core: dict) -> None:
         "fallbacks_inbound_tags": list(core.get("fallbacks_inbound_tags") or []),
     }
     core_id = env.get("PG_CORE_ID")
-    req("PUT", f"/api/core/{core_id}?restart_nodes=false", env, payload)
+    # master mode: the kit core is used ONLY by the kit node, so restarting its nodes is safe and required to apply
+    restart = "true" if env.get("INSTALL_MODE") == "master" else "false"
+    req("PUT", f"/api/core/{core_id}?restart_nodes={restart}", env, payload)
 
 
 def current_selector(cfg: dict) -> tuple[list[str], str | None]:
@@ -167,6 +187,8 @@ def ensure_panel_via_backhaul(cfg: dict) -> bool:
 
 def publish() -> None:
     """Push panel core to Iran. Export injects CAT-instagram clones of the live selector."""
+    if not EXPORT.exists():  # master/split mode: panel pushes the core to the node itself
+        return
     subprocess.run(["python3", str(EXPORT)], check=True)
 
 

@@ -14,6 +14,7 @@ Hard rules enforced in code:
 Endpoint paths are verified against the live /openapi.json before any write.
 """
 from __future__ import annotations
+from urllib.error import HTTPError
 import json, os, sys, time
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -32,8 +33,11 @@ def _req(method, path, token=None, body=None, form=False):
         if form: data = urlencode(body).encode(); h["Content-Type"] = "application/x-www-form-urlencoded"
         else: data = json.dumps(body).encode(); h["Content-Type"] = "application/json"
     if token: h["Authorization"] = f"Bearer {token}"
-    with urlopen(Request(BASE + path, data=data, headers=h, method=method), timeout=30) as r:
-        raw = r.read(); return json.loads(raw) if raw else None
+    try:
+        with urlopen(Request(BASE + path, data=data, headers=h, method=method), timeout=30) as r:
+            raw = r.read(); return json.loads(raw) if raw else None
+    except HTTPError as e:
+        sys.stderr.write(f"API {method} {path} -> {e.code}: {e.read().decode(errors='replace')[:800]}\n"); raise
 
 def login():
     r = _req("POST", "/api/admin/token", body={"username": ENV["PASARGUARD_ADMIN_USER"], "password": ENV["PASARGUARD_ADMIN_PASS"]}, form=True)
@@ -60,13 +64,29 @@ def snapshot(tok):
         except Exception as e: (out / f"{name}.error").write_text(str(e))
     os.chmod(out, 0o700); print(f"snapshot saved: {out}"); return out
 
+def _server_ca():
+    f = Path(ENV.get("NODE_SERVER_CA_FILE") or (STATE_DIR / "iran-node-cert.pem"))
+    return f.read_text() if f.exists() else ""
+
+def _inline_certs(cfg):
+    """Panel validates certificateFile paths on the MASTER filesystem; in split mode the files only exist on the Exit/Iran.
+    Embed the cert/key inline instead (refreshed by `refresh-cert` from the acme renew hook)."""
+    cf, kf = ENV.get("TLS_CERT_FILE", ""), ENV.get("TLS_KEY_FILE", "")
+    if ENV.get("EXIT_SPLIT") != "1" or not (cf and Path(cf).exists()): return cfg
+    cert, key = Path(cf).read_text().splitlines(), Path(kf).read_text().splitlines()
+    for i in cfg.get("inbounds", []):
+        for c in (i.get("streamSettings", {}).get("tlsSettings", {}) or {}).get("certificates", []):
+            if "certificateFile" in c: c.pop("certificateFile"); c.pop("keyFile", None); c["certificate"] = cert; c["key"] = key
+    return cfg
+
 def desired():
-    core_cfg = json.loads((RENDER / "templates" / "iran-core.json.tmpl").read_text())  # produced by render_iran_configs.py
+    core_cfg = _inline_certs(json.loads((RENDER / "templates" / "iran-core.json.tmpl").read_text()))
     return {
         "core": {"name": f"{PREFIX}-iran-core", "config": core_cfg, "exclude_inbound_tags": [], "fallbacks_inbound_tags": []},
         "node": {"name": f"{PREFIX}-iran", "address": (ENV.get("CTL_NODE_ADDRESS") or (ENV["EXIT_IP"] if ENV.get("EXIT_SPLIT") == "1" else "127.0.0.1") if ENV.get("CTL_MODE", "tunnel") == "tunnel" else ENV["IRAN_IP"]),
                   "port": int(ENV.get("CTL_LOCAL_PORT", "62051") if ENV.get("CTL_MODE", "tunnel") == "tunnel" else ENV.get("PG_NODE_PORT", "62050")),
-                  "api_key": ENV["PG_NODE_API_KEY"], "connection_type": "grpc", "usage_coefficient": 1.0},
+                  "api_key": ENV["PG_NODE_API_KEY"], "connection_type": "grpc", "usage_coefficient": 1.0, "keep_alive": 60,
+                  "server_ca": _server_ca()},
         "inbound_tags": [i.get("tag") for i in core_cfg.get("inbounds", []) if i.get("tag")],
     }
 
@@ -96,7 +116,8 @@ def apply(tok):
     for need in ("/api/core", "/api/node", "/api/host"):
         if paths and need not in paths: sys.exit(f"endpoint {need} missing on this Pasarguard version; adjust pg_master.py (no changes made)")
     d, problems = plan(tok)
-    if problems: sys.exit("blockers present; nothing applied")
+    if not d["node"]["server_ca"]: problems.append("node server_ca missing (run --phase iran first)")
+    if problems: sys.exit("blockers present; nothing applied: " + "; ".join(problems))
     snapshot(tok)
     state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {"created": []}
     core = _req("POST", "/api/core", tok, d["core"]); state["created"].append({"type": "core", "id": core["id"], "name": d["core"]["name"]})
@@ -106,6 +127,14 @@ def apply(tok):
     STATE_FILE.write_text(json.dumps(state, indent=2)); os.chmod(STATE_FILE, 0o600)
     print(f"created core id={core['id']} node id={node['id']}  (write PG_CORE_ID / PG_NODE_ID to .env)")
     print("hosts: create via `install.sh --phase hosts` after the node reports connected")
+
+def refresh_cert(tok):
+    st = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {"created": []}
+    core = next((o for o in st["created"] if o["type"] == "core"), None)
+    if not core: sys.exit("no kit core recorded")
+    cur = _req("GET", f"/api/core/{core['id']}", tok); cfg = _inline_certs(cur["config"])
+    body = {k: cur.get(k) for k in ("name", "exclude_inbound_tags", "fallbacks_inbound_tags")}; body["config"] = cfg
+    _req("PUT", f"/api/core/{core['id']}", tok, body); print("kit core cert refreshed (only kit node reloads)")
 
 def rollback(tok):
     if not STATE_FILE.exists(): sys.exit("nothing recorded; nothing to roll back")
@@ -121,4 +150,4 @@ if __name__ == "__main__":
     if cmd == "login": print("login ok"); sys.exit(0)
     if cmd != "plan": STATE_DIR.mkdir(parents=True, exist_ok=True)
     if cmd in ("apply", "rollback") and "--yes" not in sys.argv: sys.exit(f"{cmd} requires --yes (run plan first)")
-    {"snapshot": snapshot, "plan": plan, "apply": apply, "rollback": rollback}[cmd](tok)
+    {"snapshot": snapshot, "plan": plan, "apply": apply, "rollback": rollback, "refresh-cert": refresh_cert}[cmd](tok)

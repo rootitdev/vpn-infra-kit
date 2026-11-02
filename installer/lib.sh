@@ -43,7 +43,9 @@ on_iran(){ # run a command on Iran
   target_guard
   if [ -n "${IRAN_SSH_KEY_FILE:-}" ]; then ssh $(_ssh_opts) -i "$IRAN_SSH_KEY_FILE" -p "$IRAN_SSH_PORT" "$IRAN_SSH_USER@$IRAN_IP" "$@";
   else SSHPASS="$IRAN_SSH_PASSWORD" sshpass -e ssh $(_ssh_opts) -p "$IRAN_SSH_PORT" "$IRAN_SSH_USER@$IRAN_IP" "$@"; fi; }
-to_iran(){ # to_iran localpath remotepath
+to_iran(){ # to_iran localpath remotepath   ("dir/." copies the directory CONTENTS, via tar; modern scp rejects ".")
+  target_guard
+  if [[ "$1" == */. ]]; then tar -C "${1%/.}" -cf - . | on_iran "mkdir -p '$2' && tar -C '$2' -xf - --no-same-owner"; return; fi
   if [ -n "${IRAN_SSH_KEY_FILE:-}" ]; then scp $(_ssh_opts) -i "$IRAN_SSH_KEY_FILE" -P "$IRAN_SSH_PORT" -r "$1" "$IRAN_SSH_USER@$IRAN_IP:$2";
   else SSHPASS="$IRAN_SSH_PASSWORD" sshpass -e scp $(_ssh_opts) -P "$IRAN_SSH_PORT" -r "$1" "$IRAN_SSH_USER@$IRAN_IP:$2"; fi; }
 backup_path(){ # backup_path /abs/path  (local) — copies, never moves
