@@ -13,7 +13,7 @@ tar -C "$KIT_ROOT" --exclude=.git --exclude=.target-deny --exclude=.scan-deny -c
 "${S[@]}" "$R" "cat /root/.vpn-secrets/.env 2>/dev/null" | python3 -c '
 import sys,re
 loc=sys.argv[1]; rem={}
-GEN={"XRAY_BRIDGE_UUID","XHTTP_PATH","PG_NODE_API_KEY","BACKUP_PASSPHRASE","REALITY_SHORT_ID","REALITY_CLIENT_SHORT_ID","REALITY_PRIVATE_KEY","REALITY_PUBLIC_KEY","REALITY_CLIENT_PRIVATE_KEY","PG_CORE_ID","PG_NODE_ID","PG_GROUP_ID"}  # only installer-generated keys
+GEN={"XRAY_BRIDGE_UUID","XHTTP_PATH","PG_NODE_API_KEY","BACKUP_PASSPHRASE","REALITY_SHORT_ID","REALITY_CLIENT_SHORT_ID","REALITY_PRIVATE_KEY","REALITY_PUBLIC_KEY","REALITY_CLIENT_PRIVATE_KEY","PG_CORE_ID","PG_NODE_ID","PG_GROUP_ID","PATH_WEB_PASS"}  # only installer-generated keys
 for l in sys.stdin.read().splitlines():
     m=re.match(r"^([A-Z_][A-Z0-9_]*)=(.*)$",l)
     if m and m.group(1) in GEN and m.group(2) not in ("","\x27\x27"): rem[m.group(1)]=m.group(2)

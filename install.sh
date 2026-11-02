@@ -76,6 +76,7 @@ phase_gen(){
   [ -n "${XHTTP_PATH:-}" ] || set_env XHTTP_PATH "/$(openssl rand -hex 4)/$(openssl rand -hex 3)"
   [ -n "${PG_NODE_API_KEY:-}" ] || set_env PG_NODE_API_KEY "$(cat /proc/sys/kernel/random/uuid)"
   [ -n "${BACKUP_PASSPHRASE:-}" ] || { set_env BACKUP_PASSPHRASE "$(openssl rand -base64 33 | tr -d '\n=+/')"; warn "BACKUP_PASSPHRASE generated — operator must copy it OFFLINE (read it with: grep ^BACKUP_PASSPHRASE= $ENV_FILE)"; }
+  if [ "${INSTALL_PANEL_FAILOVER:-0}" = 1 ]; then [ -n "${PATH_WEB_PASS:-}" ] || set_env PATH_WEB_PASS "$(openssl rand -base64 24 | tr -d '\n=+/')"; fi
   [ -n "${REALITY_SHORT_ID:-}" ] || set_env REALITY_SHORT_ID "$(openssl rand -hex 8)"
   [ -n "${REALITY_CLIENT_SHORT_ID:-}" ] || set_env REALITY_CLIENT_SHORT_ID "$(openssl rand -hex 8)"
   ensure_kxray; XR=$(kxray)
@@ -87,7 +88,7 @@ phase_gen(){
 phase_cert(){ # split mode: origin cert for the CDN/gray hostnames via acme.sh DNS-01 (Cloudflare); no port 80 needed
   [ "$SPLIT" = 1 ] || { log "cert: non-split uses existing TLS_CERT_FILE"; return; }
   need ACME_EMAIL; local tok="${CF_DNS_TOKEN:-${CF_API_TOKEN:-}}"; [ -n "$tok" ] || die "CF_DNS_TOKEN (or CF_API_TOKEN) required for DNS-01"
-  local doms=() d; for d in "${IRAN_DOMAIN:-}" "${XHTTP_DOMAIN:-}" "${CF_GRAY_DOMAIN:-}" "${CFORANGE_DOMAIN:-}" "${GCORE_DOMAIN:-}" "${BUNNY_DOMAIN:-}"; do [ -n "$d" ] && doms+=(-d "$d"); done
+  local doms=() d; for d in "${IRAN_DOMAIN:-}" "${PATH_WEB_DOMAIN:-}" "${XHTTP_DOMAIN:-}" "${CF_GRAY_DOMAIN:-}" "${CFORANGE_DOMAIN:-}" "${GCORE_DOMAIN:-}" "${BUNNY_DOMAIN:-}"; do [ -n "$d" ] && doms+=(-d "$d"); done
   [ ${#doms[@]} -gt 0 ] || die "no CDN hostnames set"
   [ -x /root/.acme.sh/acme.sh ] || curl -fsSL https://get.acme.sh | sh -s email="$ACME_EMAIL" >/dev/null
   mkdir -p "$(dirname "$TLS_CERT_FILE")"; chmod 700 "$(dirname "$TLS_CERT_FILE")"
@@ -277,9 +278,76 @@ phase_hosts(){ # subscription hosts (remark HOST_REMARK_TEMPLATE) + attach kit i
 }
 
 phase_panels(){
-  [ "$MODE" = master ] && [ "${INSTALL_PANELS:-0}" != 1 ] && { log "master mode: panels skipped (set INSTALL_PANELS=1 to add path-web only)"; return; }
+  # Setup answers (PROMPT.md): INSTALL_PANEL_FAILOVER / INSTALL_PANEL_IG / INSTALL_PANEL_SALES (1=yes). Honored in all modes.
   render_tree "$RENDERED"
-  for p in path-web settle-web ig-mult-web sni-watch; do [ -x "$RENDERED/panels/$p/install.sh" ] && bash "$RENDERED/panels/$p/install.sh"; done
+  [ "${INSTALL_PANELS:-0}" = 1 ] && { : "${INSTALL_PANEL_FAILOVER:=1}"; : "${INSTALL_PANEL_IG:=1}"; : "${INSTALL_PANEL_SALES:=1}"; }   # legacy switch
+  if [ "${INSTALL_PANEL_FAILOVER:-0}" = 1 ]; then install_path_web; else log "panels: failover web panel not requested"; fi
+  for pair in "IG:ig-mult-web" "SALES:settle-web"; do
+    v="INSTALL_PANEL_${pair%%:*}"; p="${pair#*:}"
+    [ "${!v:-0}" = 1 ] || { log "panels: $p not requested"; continue; }
+    if [ "$MODE" = master ] && [ "$p" = settle-web ]; then warn "sales panel in master mode sells on the SHARED master panel — confirm with the master owner"; fi
+    [ -f "$RENDERED/panels/$p/install.sh" ] || { warn "$p installer missing"; continue; }
+    ( cd "$RENDERED/panels/$p" && bash install.sh </dev/null ) || warn "$p install failed (see output)"
+  done
+}
+
+# Failover web panel (path-web). Split mode: direct HTTPS on PATH_WEB_PORT with the kit cert, reachable only from
+# Cloudflare edge IPs (PATH_WEB_DOMAIN proxied + Origin Rule -> PATH_WEB_PORT). Non-split: 127.0.0.1 behind nginx.
+install_path_web(){
+  need PATH_WEB_PASS
+  local port="${PATH_WEB_PORT:-8790}" listen lib=/usr/local/lib/path-web etc=/etc/path-web
+  if [ "$SPLIT" = 1 ]; then listen="0.0.0.0:$port"; need PATH_WEB_DOMAIN; else listen="127.0.0.1:$port"; fi
+  install -d -m 755 "$lib"; install -d -m 700 "$etc" /var/log/vpn-path
+  install -m 644 "$RENDERED/panels/path-web/app.py" "$lib/app.py"
+  python3 - "$etc/config.env" "$listen" "${PATH_WEB_USER:-admin}" "$PATH_WEB_PASS" "$([ "$SPLIT" = 1 ] && echo "$TLS_CERT_FILE")" "$([ "$SPLIT" = 1 ] && echo "$TLS_KEY_FILE")" <<'P2'
+import hashlib,os,secrets,sys
+cfg,listen,user,pw,cert,key=sys.argv[1:]
+salt=secrets.token_bytes(16); it=310000
+h=hashlib.pbkdf2_hmac("sha256",pw.encode(),salt,it)
+old={}
+if os.path.exists(cfg):
+    for l in open(cfg):
+        if "=" in l: k,v=l.rstrip("\n").split("=",1); old[k]=v
+L=[f"LISTEN={listen}",f"AUTH_USER={user}",f"AUTH_HASH=pbkdf2_sha256${it}${salt.hex()}${h.hex()}",
+   f"SESSION_SECRET={old.get('SESSION_SECRET') or secrets.token_hex(32)}","COOKIE_NAME=vpnpath"]
+if cert: L+= [f"TLS_CERT={cert}",f"TLS_KEY={key}"]
+open(cfg,"w").write("\n".join(L)+"\n"); os.chmod(cfg,0o600)
+P2
+  cat > /etc/systemd/system/path-web.service <<U
+[Unit]
+Description=vpn-infra-kit failover web panel (path-web)
+After=network-online.target
+[Service]
+ExecStart=/usr/bin/python3 $lib/app.py
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=VPN_SCRIPTS=/root/vpn-infra/scripts
+Restart=always
+RestartSec=2
+[Install]
+WantedBy=multi-user.target
+U
+  systemctl daemon-reload; systemctl enable -q path-web; systemctl restart path-web
+  if [ "$SPLIT" = 1 ]; then   # only Cloudflare edges may reach the panel port
+    local cf; cf=$(curl -fsS https://www.cloudflare.com/ips-v4 | tr '\n' ',' | sed 's/,$//')
+    [ -n "$cf" ] || die "could not fetch Cloudflare IP ranges"
+    nft delete table inet ${KIT_PREFIX}_panel 2>/dev/null || true
+    nft -f - <<N
+table inet ${KIT_PREFIX}_panel {
+  chain input { type filter hook input priority -5; policy accept;
+    iif lo accept
+    ip saddr { $cf } tcp dport $port accept
+    tcp dport $port drop comment "vpn-infra-kit:${KIT_PREFIX}-panel"
+  }
+}
+N
+    nft list table inet ${KIT_PREFIX}_panel > /etc/nftables.d-${KIT_PREFIX}_panel.nft
+    grep -q "${KIT_PREFIX}_panel" /etc/nftables.conf || echo "include \"/etc/nftables.d-${KIT_PREFIX}_panel.nft\"" >> /etc/nftables.conf
+    systemctl enable -q nftables
+    log "path-web: https://${PATH_WEB_DOMAIN}/ (CF proxied; add Origin Rule -> port $port). user=${PATH_WEB_USER:-admin}, password in .env PATH_WEB_PASS"
+  else
+    log "path-web on $listen — add an nginx location (see panels/path-web/README.md)"
+  fi
 }
 
 phase_failover(){
@@ -330,7 +398,7 @@ if [ $PLAN = 1 ]; then
   iran     : copy kit scripts + units, docker pg-node ($PG_NODE_IMAGE) on :$PG_NODE_PORT
   ctl      : CTL_MODE=${CTL_MODE:-tunnel}: $( [ "${CTL_MODE:-tunnel}" = tunnel ] && echo "Exit portal ${KIT_PREFIX}-ctl-portal + local entry ${CTL_LISTEN:-127.0.0.1}:${CTL_LOCAL_PORT:-62051}; Iran unit ${KIT_PREFIX}-ctl-bridge via ${CTL_PATHS:-TO-AMS-XHTTP,TO-AMS-REALITY}; node API bound 127.0.0.1" || echo "direct") ; Iran nft table ${KIT_PREFIX}_ctl: node port lo$( { [ "${CTL_MODE:-tunnel}" = direct ] || [ "${CTL_DIRECT_FALLBACK:-0}" = 1 ]; } && echo " + EXIT_IP") only
   paths    : $( [ "$MODE" = master ] && echo "Pasarguard ADD-ONLY: core '${KIT_PREFIX}-iran-core', node '${KIT_PREFIX}-iran', hosts '${KIT_PREFIX}-*'" || echo "bootstrap own panel entities" )
-  panels   : $( [ "$MODE" = master ] && echo "skipped" || echo "path-web, settle-web, ig-mult-web, sni-watch" )
+  panels   : failover(path-web)=${INSTALL_PANEL_FAILOVER:-0} ig=${INSTALL_PANEL_IG:-0} sales=${INSTALL_PANEL_SALES:-0}$( [ "$SPLIT" = 1 ] && echo " (split: HTTPS :${PATH_WEB_PORT:-8790} on ${PATH_WEB_DOMAIN:-?}, CF-only)" )
   failover : vpn-health/vpn-failover timers; priority: $(PYTHONPATH="$KIT_ROOT/scripts" python3 -c 'import vpn_paths as v;print(" > ".join(v.PRIORITY))'); CFORANGE watch-only
   backup   : daily GPG(AES256) archive to Telegram
   verify   : 204 through every path + end-to-end

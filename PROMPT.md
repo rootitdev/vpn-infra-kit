@@ -74,7 +74,14 @@ If the panel runs in docker without host networking, set `CTL_LISTEN`/`CTL_NODE_
      and remind me at the end.
    - **K. Path priority:** show the mode default and ask whether to keep it or give `PATH_PRIORITY`; ask about
      `CTL_DIRECT_FALLBACK`.
-   Auto-generated (never ask): REALITY keys, UUIDs, XHTTP path, node API key, backup passphrase.
+   - **L. Web panels — ask each as a separate yes/no question; build/install the web version of every "yes":**
+     1. "Install the Instagram multiplier web panel?" → `INSTALL_PANEL_IG=1`
+     2. "Install the Failover web panel?" → `INSTALL_PANEL_FAILOVER=1`; then ask its hostname (`PATH_WEB_DOMAIN`, e.g. path.<zone>)
+        and login user (`PATH_WEB_USER`, default admin). Password is generated (`PATH_WEB_PASS`) — never show it in chat;
+        tell me where it is stored. In split mode it runs on the Exit over HTTPS on `PATH_WEB_PORT` (default 8790) behind a
+        CF-proxied hostname + Origin Rule to that port; nft allows only Cloudflare edge IPs to that port.
+     3. "Install the Sales web panel?" → `INSTALL_PANEL_SALES=1` (master mode: warn it sells on the shared master panel).
+   Auto-generated (never ask): REALITY keys, UUIDs, XHTTP path, node API key, backup passphrase, panel passwords.
    Write everything to `/root/.vpn-secrets/.env` (600) following `.env.example`; never display the file.
 2. Copy the repo to the Exit/master at `/opt/vpn-infra-kit`, write the `.env` there (600) with `INSTALL_MODE` set to my answer,
    create the target-deny file, and run `./install.sh --plan`.
@@ -84,7 +91,7 @@ If the panel runs in docker without host networking, set `CTL_LISTEN`/`CTL_NODE_
    on which host, plus what stays untouched (count of existing nodes/hosts/users). List blockers. **Wait for my "yes".**
 4. After my OK, run phases one at a time and report after each:
    `gen` → `exit` → `iran` (includes `ctl`) → `paths` (in master mode asks again before writing to the master API) →
-   `hosts` (creates the subscription hosts and appends the new inbounds to `PG_GROUPS` — show its dry-run first) → `panels` (standalone only) → `failover` → `backup` → `verify`.
+   `hosts` (creates the subscription hosts and appends the new inbounds to `PG_GROUPS` — show its dry-run first) → `cert` (split) → `panels` (any mode; installs only the panels answered "yes" in L) → `failover` → `backup` → `verify`.
 5. Manual items you must guide me through (with exact clicks/values) and then re-check: DNS records, Gcore resource,
    Bunny pull zone + custom hostname cert, Cloudflare settings for CF-orange (see docs/ARCHITECTURE.md), TLS certs,
    and — if master multiplexes :443 with an SNI stream map — the map entries for the new hostnames (show me the exact diff first).

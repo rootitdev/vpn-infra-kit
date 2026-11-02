@@ -137,7 +137,7 @@ def refresh_cert(tok):
     if not core: sys.exit("no kit core recorded")
     cur = _req("GET", f"/api/core/{core['id']}", tok); cfg = _inline_certs(cur["config"])
     body = {k: cur.get(k) for k in ("name", "exclude_inbound_tags", "fallbacks_inbound_tags")}; body["config"] = cfg
-    _req("PUT", f"/api/core/{core['id']}", tok, body); print("kit core cert refreshed (only kit node reloads)")
+    _req("PUT", f"/api/core/{core['id']}?restart_nodes=true", tok, body); print("kit core cert refreshed (only the kit node restarts)")
 
 def rollback(tok):
     if not STATE_FILE.exists(): sys.exit("nothing recorded; nothing to roll back")

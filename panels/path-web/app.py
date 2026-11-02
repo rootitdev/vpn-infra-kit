@@ -560,7 +560,7 @@ class Handler(BaseHTTPRequestHandler):
         return valid_session(self._cookie())
 
     def _secure(self) -> bool:
-        return (self.headers.get("X-Forwarded-Proto") or "").lower() == "https"
+        return bool(_cfg.get("TLS_CERT")) or (self.headers.get("X-Forwarded-Proto") or "").lower() == "https"
 
     def _send(self, code: int, body: bytes, ctype: str, extra: list[tuple[str, str]] | None = None) -> None:
         self.send_response(code)
@@ -655,7 +655,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, b"not found", "text/plain")
 
     def _login(self) -> None:
-        ip = self.headers.get("X-Real-IP") or self.client_address[0]
+        ip = self.headers.get("CF-Connecting-IP") or self.headers.get("X-Real-IP") or self.client_address[0]
         ctype = (self.headers.get("Content-Type") or "").lower()
         data = self._read_json() if "json" in ctype else self._read_form()
         user = (data.get("user") or "").strip()
@@ -676,6 +676,12 @@ def main() -> None:
     listen = _cfg.get("LISTEN") or "127.0.0.1:8790"
     host, _, port_s = listen.rpartition(":")
     httpd = ThreadingHTTPServer((host or "127.0.0.1", int(port_s)), Handler)
+    if _cfg.get("TLS_CERT"):  # direct HTTPS (no nginx), e.g. split-mode Exit behind a CF orange hostname
+        import ssl
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ctx.load_cert_chain(_cfg["TLS_CERT"], _cfg.get("TLS_KEY") or None)
+        httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
     httpd.serve_forever()
 
 
