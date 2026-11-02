@@ -117,6 +117,8 @@ def rollback(tok):
     STATE_FILE.rename(STATE_FILE.with_suffix(".rolledback.json"))
 
 if __name__ == "__main__":
-    cmd = sys.argv[1] if len(sys.argv) > 1 else "plan"; tok = login(); STATE_DIR.mkdir(parents=True, exist_ok=True)
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "plan"; tok = login()
+    if cmd == "login": print("login ok"); sys.exit(0)
+    if cmd != "plan": STATE_DIR.mkdir(parents=True, exist_ok=True)
     if cmd in ("apply", "rollback") and "--yes" not in sys.argv: sys.exit(f"{cmd} requires --yes (run plan first)")
     {"snapshot": snapshot, "plan": plan, "apply": apply, "rollback": rollback}[cmd](tok)

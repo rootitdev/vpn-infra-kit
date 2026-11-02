@@ -17,7 +17,7 @@ MODE="${INSTALL_MODE:-}"; case "$MODE" in standalone|master) ;; *) die "set INST
 [ "$MODE" = master ] && export INBOUND_PREFIX="${KIT_PREFIX}-"
 RENDERED=/opt/vpn-infra-kit/rendered; export KIT_RENDERED=$RENDERED
 KXRAY_DIR=/opt/vpn-infra-kit/exit; KXRAY_UNIT="${KIT_PREFIX}-exit-xray"
-mkdir -p "$STATE_DIR"; chmod 700 "$STATE_DIR"
+[ "$PLAN" = 1 ] || { mkdir -p "$STATE_DIR"; chmod 700 "$STATE_DIR"; }   # --plan writes nothing
 
 port_free(){ ! ss -Hltn "sport = :$1" | grep -q .; }
 
@@ -27,7 +27,13 @@ phase_preflight(){
   for b in python3 curl ssh docker nft ss openssl; do command -v $b >/dev/null || die "missing binary $b"; done
   [ -n "${IRAN_SSH_KEY_FILE:-}" ] || command -v sshpass >/dev/null || die "sshpass needed for password SSH (apt install sshpass)"
   on_iran 'echo iran-ssh-ok; uname -r; docker --version 2>/dev/null || echo NO_DOCKER; ss -Hltn | awk "{print \$4}" | grep -Eo "[0-9]+$" | sort -nu | tr "\n" " "' || die "cannot SSH to Iran"
-  curl -fsS -m 10 "$PASARGUARD_URL/openapi.json" -o /dev/null && log "Pasarguard API reachable" || die "Pasarguard API not reachable at PASARGUARD_URL"
+  # /openapi.json is 404 when the panel runs with docs disabled (common in production) -> verify by admin login instead
+  python3 "$KIT_ROOT/master/pg_master.py" login >/dev/null 2>&1 \
+    && log "Pasarguard API reachable (admin login ok)" || die "Pasarguard API login failed at PASARGUARD_URL"
+  # exit-side prerequisites on THIS host (master mode assumes the master is also the Exit)
+  XR=$(command -v xray || ls /root/.pg_nodes/bin/xray 2>/dev/null || true); [ -n "$XR" ] && log "xray binary: $XR" || warn "no xray binary on this host — phase gen/exit need one (install xray-core standalone; master's panel container is NOT used)"
+  command -v nginx >/dev/null && log "nginx present" || warn "nginx absent — phase exit will NOT create the XHTTP/CDN origin on 443; CDN paths (xhttp/gcore/bunny/cf) stay dead until an origin is set up"
+  [ -f "${TLS_CERT_FILE:-/nonexistent}" ] && log "TLS cert present" || warn "TLS cert ${TLS_CERT_FILE:-} missing — needed for XHTTP/DIRECT origin"
   docker ps --format '{{.Names}} {{.Image}}' | sed 's/^/  container: /'
   for p in "${REALITY_PORT}" "${XHTTP_BRIDGE_PORT}" "${DIRECT_TLS_PORT}" "${SOCKS_TEST_PORT}"; do
     if port_free "$p"; then log "port $p free"; elif systemctl is-active -q "$KXRAY_UNIT"; then log "port $p held by our $KXRAY_UNIT (ok)"; else warn "port $p IN USE on master — pick another in .env"; fi; done
@@ -35,7 +41,7 @@ phase_preflight(){
   nft list ruleset >/dev/null 2>&1 && log "nftables present: $(nft list tables | tr '\n' ' ')"
   for d in PANEL_DOMAIN XHTTP_DOMAIN CF_GRAY_DOMAIN CFORANGE_DOMAIN GCORE_DOMAIN BUNNY_DOMAIN IRAN_DOMAIN; do
     v="${!d:-}"; [ -z "$v" ] && { log "$d empty -> path skipped"; continue; }; getent hosts "$v" >/dev/null && log "$d resolves" || warn "$d does not resolve yet"; done
-  [ "$MODE" = master ] && python3 "$KIT_ROOT/master/pg_master.py" snapshot >/dev/null && log "master API snapshot taken"
+  if [ "$MODE" = master ] && [ "$PLAN" != 1 ]; then python3 "$KIT_ROOT/master/pg_master.py" snapshot >/dev/null && log "master API snapshot taken"; fi
 }
 
 phase_gen(){
