@@ -27,7 +27,7 @@ STATE_FILE = STATE_DIR / "master-created.json"
 RENDER = Path(ENV.get("KIT_RENDERED", "/opt/vpn-infra-kit/rendered"))
 
 def _req(method, path, token=None, body=None, form=False):
-    data = None; h = {"Accept": "application/json"}
+    data = None; h = {"Accept": "application/json", "User-Agent": "vpn-infra-kit/1.0"}  # CF bot rules 403 Python-urllib UA
     if body is not None:
         if form: data = urlencode(body).encode(); h["Content-Type"] = "application/x-www-form-urlencoded"
         else: data = json.dumps(body).encode(); h["Content-Type"] = "application/json"
@@ -64,7 +64,7 @@ def desired():
     core_cfg = json.loads((RENDER / "templates" / "iran-core.json.tmpl").read_text())  # produced by render_iran_configs.py
     return {
         "core": {"name": f"{PREFIX}-iran-core", "config": core_cfg, "exclude_inbound_tags": [], "fallbacks_inbound_tags": []},
-        "node": {"name": f"{PREFIX}-iran", "address": (ENV.get("CTL_NODE_ADDRESS", "127.0.0.1") if ENV.get("CTL_MODE", "tunnel") == "tunnel" else ENV["IRAN_IP"]),
+        "node": {"name": f"{PREFIX}-iran", "address": (ENV.get("CTL_NODE_ADDRESS") or (ENV["EXIT_IP"] if ENV.get("EXIT_SPLIT") == "1" else "127.0.0.1") if ENV.get("CTL_MODE", "tunnel") == "tunnel" else ENV["IRAN_IP"]),
                   "port": int(ENV.get("CTL_LOCAL_PORT", "62051") if ENV.get("CTL_MODE", "tunnel") == "tunnel" else ENV.get("PG_NODE_PORT", "62050")),
                   "api_key": ENV["PG_NODE_API_KEY"], "connection_type": "grpc", "usage_coefficient": 1.0},
         "inbound_tags": [i.get("tag") for i in core_cfg.get("inbounds", []) if i.get("tag")],

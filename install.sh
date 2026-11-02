@@ -17,6 +17,23 @@ MODE="${INSTALL_MODE:-}"; case "$MODE" in standalone|master) ;; *) die "set INST
 [ "$MODE" = master ] && export INBOUND_PREFIX="${KIT_PREFIX}-"
 RENDERED=/opt/vpn-infra-kit/rendered; export KIT_RENDERED=$RENDERED
 KXRAY_DIR=/opt/vpn-infra-kit/exit; KXRAY_UNIT="${KIT_PREFIX}-exit-xray"
+# EXIT_SPLIT=1: Exit host != Pasarguard master (master is panel-only / behind cloudflared). This script then runs ON THE
+# EXIT host (ship it with installer/ship_to_exit.sh). Master gets ONLY panel API objects (over PASARGUARD_URL, e.g. the
+# panel's public https URL) -- nothing is installed on the master and its IP is never used by Iran.
+#   - control portal lives on the Exit: dokodemo 0.0.0.0:CTL_LOCAL_PORT, nft-restricted to MASTER_IP; panel node address = EXIT_IP:CTL_LOCAL_PORT
+#   - XHTTP origin: kit xray serves TLS directly on XHTTP_ORIGIN_PORT (no nginx, no 443 sharing with the existing node);
+#     CF orange needs an Origin Rule (dest port -> XHTTP_ORIGIN_PORT); Gcore/Bunny origins use https://EXIT_IP:XHTTP_ORIGIN_PORT
+#   - kit uses its own xray binary in $KXRAY_DIR/bin (existing node's xray/container never touched)
+SPLIT="${EXIT_SPLIT:-0}"; export CF_GRAY_PORT="${CF_GRAY_PORT:-443}"
+if [ "$SPLIT" = 1 ]; then
+  need MASTER_IP EXIT_IP
+  export CTL_LISTEN=0.0.0.0 CTL_NODE_ADDRESS="$EXIT_IP" XHTTP_BRIDGE_PORT="${XHTTP_ORIGIN_PORT:-10443}" CF_GRAY_PORT="${XHTTP_ORIGIN_PORT:-10443}"
+fi
+kxray(){ if [ "$SPLIT" = 1 ]; then echo "$KXRAY_DIR/bin/xray"; else command -v xray || echo /root/.pg_nodes/bin/xray; fi; }
+ensure_kxray(){ [ "$SPLIT" = 1 ] || return 0; [ -x "$KXRAY_DIR/bin/xray" ] && return 0
+  mkdir -p "$KXRAY_DIR/bin"; local t; t=$(mktemp -d)
+  curl -fsSL -o "$t/x.zip" "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION:-v25.10.15}/Xray-linux-64.zip"
+  (cd "$t" && python3 -c 'import zipfile;zipfile.ZipFile("x.zip").extractall(".")') && install -m 755 "$t/xray" "$KXRAY_DIR/bin/xray"; rm -rf "$t"; }
 [ "$PLAN" = 1 ] || { mkdir -p "$STATE_DIR"; chmod 700 "$STATE_DIR"; }   # --plan writes nothing
 
 port_free(){ ! ss -Hltn "sport = :$1" | grep -q .; }
@@ -24,15 +41,19 @@ port_free(){ ! ss -Hltn "sport = :$1" | grep -q .; }
 phase_preflight(){
   log "preflight (read-only) — mode=$MODE"
   need EXIT_IP IRAN_IP PASARGUARD_URL PASARGUARD_ADMIN_USER PASARGUARD_ADMIN_PASS
-  for b in python3 curl ssh docker nft ss openssl; do command -v $b >/dev/null || die "missing binary $b"; done
+  if [ "$SPLIT" = 1 ]; then bins="python3 curl ssh nft ss openssl"; else bins="python3 curl ssh docker nft ss openssl"; fi
+  for b in $bins; do command -v $b >/dev/null || die "missing binary $b"; done
+  if [ "$SPLIT" = 1 ]; then log "split mode: exit=$EXIT_IP (this host), master=$MASTER_IP (panel API only via $PASARGUARD_URL)"
+    for p in "${CTL_LOCAL_PORT:-62051}"; do port_free "$p" && log "port $p free" || warn "port $p IN USE — change CTL_LOCAL_PORT"; done; fi
   [ -n "${IRAN_SSH_KEY_FILE:-}" ] || command -v sshpass >/dev/null || die "sshpass needed for password SSH (apt install sshpass)"
   on_iran 'echo iran-ssh-ok; uname -r; docker --version 2>/dev/null || echo NO_DOCKER; ss -Hltn | awk "{print \$4}" | grep -Eo "[0-9]+$" | sort -nu | tr "\n" " "' || die "cannot SSH to Iran"
   # /openapi.json is 404 when the panel runs with docs disabled (common in production) -> verify by admin login instead
   python3 "$KIT_ROOT/master/pg_master.py" login >/dev/null 2>&1 \
     && log "Pasarguard API reachable (admin login ok)" || die "Pasarguard API login failed at PASARGUARD_URL"
   # exit-side prerequisites on THIS host (master mode assumes the master is also the Exit)
-  XR=$(command -v xray || ls /root/.pg_nodes/bin/xray 2>/dev/null || true); [ -n "$XR" ] && log "xray binary: $XR" || warn "no xray binary on this host — phase gen/exit need one (install xray-core standalone; master's panel container is NOT used)"
-  command -v nginx >/dev/null && log "nginx present" || warn "nginx absent — phase exit will NOT create the XHTTP/CDN origin on 443; CDN paths (xhttp/gcore/bunny/cf) stay dead until an origin is set up"
+  [ "$SPLIT" = 1 ] && log "split: kit xray will be downloaded to $KXRAY_DIR/bin (existing xray untouched)"
+  XR=$(command -v xray || ls /root/.pg_nodes/bin/xray 2>/dev/null || true); [ "$SPLIT" = 1 ] || { [ -n "$XR" ] && log "xray binary: $XR"; } || warn "no xray binary on this host — phase gen/exit need one (install xray-core standalone; master's panel container is NOT used)"
+  [ "$SPLIT" = 1 ] || command -v nginx >/dev/null && log "nginx present or not needed (split: xray serves origin TLS on ${XHTTP_ORIGIN_PORT:-10443})" || warn "nginx absent — phase exit will NOT create the XHTTP/CDN origin on 443; CDN paths (xhttp/gcore/bunny/cf) stay dead until an origin is set up"
   [ -f "${TLS_CERT_FILE:-/nonexistent}" ] && log "TLS cert present" || warn "TLS cert ${TLS_CERT_FILE:-} missing — needed for XHTTP/DIRECT origin"
   docker ps --format '{{.Names}} {{.Image}}' | sed 's/^/  container: /'
   for p in "${REALITY_PORT}" "${XHTTP_BRIDGE_PORT}" "${DIRECT_TLS_PORT}" "${SOCKS_TEST_PORT}"; do
@@ -52,13 +73,25 @@ phase_gen(){
   [ -n "${BACKUP_PASSPHRASE:-}" ] || { set_env BACKUP_PASSPHRASE "$(openssl rand -base64 33 | tr -d '\n=+/')"; warn "BACKUP_PASSPHRASE generated — operator must copy it OFFLINE (read it with: grep ^BACKUP_PASSPHRASE= $ENV_FILE)"; }
   [ -n "${REALITY_SHORT_ID:-}" ] || set_env REALITY_SHORT_ID "$(openssl rand -hex 8)"
   [ -n "${REALITY_CLIENT_SHORT_ID:-}" ] || set_env REALITY_CLIENT_SHORT_ID "$(openssl rand -hex 8)"
-  XR=$(command -v xray || echo /root/.pg_nodes/bin/xray)
+  ensure_kxray; XR=$(kxray)
   if [ -z "${REALITY_PRIVATE_KEY:-}" ]; then out=$("$XR" x25519); set_env REALITY_PRIVATE_KEY "$(echo "$out" | awk -F': ' '/Private/{print $2}')"; set_env REALITY_PUBLIC_KEY "$(echo "$out" | awk -F': ' '/Public|Password/{print $2}' | head -1)"; fi
   if [ -z "${REALITY_CLIENT_PRIVATE_KEY:-}" ]; then out=$("$XR" x25519); set_env REALITY_CLIENT_PRIVATE_KEY "$(echo "$out" | awk -F': ' '/Private/{print $2}')"; fi
   render_tree "$RENDERED"; chmod -R go-rwx "$RENDERED"
 }
 
+phase_cert(){ # split mode: origin cert for the CDN/gray hostnames via acme.sh DNS-01 (Cloudflare); no port 80 needed
+  [ "$SPLIT" = 1 ] || { log "cert: non-split uses existing TLS_CERT_FILE"; return; }
+  need ACME_EMAIL; local tok="${CF_DNS_TOKEN:-${CF_API_TOKEN:-}}"; [ -n "$tok" ] || die "CF_DNS_TOKEN (or CF_API_TOKEN) required for DNS-01"
+  local doms=() d; for d in "${XHTTP_DOMAIN:-}" "${CF_GRAY_DOMAIN:-}" "${CFORANGE_DOMAIN:-}" "${GCORE_DOMAIN:-}" "${BUNNY_DOMAIN:-}"; do [ -n "$d" ] && doms+=(-d "$d"); done
+  [ ${#doms[@]} -gt 0 ] || die "no CDN hostnames set"
+  [ -x /root/.acme.sh/acme.sh ] || curl -fsSL https://get.acme.sh | sh -s email="$ACME_EMAIL" >/dev/null
+  mkdir -p "$(dirname "$TLS_CERT_FILE")"; chmod 700 "$(dirname "$TLS_CERT_FILE")"
+  CF_Token="$tok" /root/.acme.sh/acme.sh --issue --dns dns_cf --server letsencrypt "${doms[@]}" --keylength ec-256 || [ $? = 2 ]
+  /root/.acme.sh/acme.sh --install-cert -d "${doms[1]}" --ecc --fullchain-file "$TLS_CERT_FILE" --key-file "$TLS_KEY_FILE" --reloadcmd "systemctl restart $KXRAY_UNIT 2>/dev/null || true"
+}
+
 phase_exit(){
+  [ "$SPLIT" = 1 ] && [ ! -s "$TLS_CERT_FILE" ] && phase_cert
   log "exit/master: dedicated backhaul xray ($KXRAY_UNIT) — master's own xray is NOT touched"
   render_tree "$RENDERED"; mkdir -p "$KXRAY_DIR"; backup_path "$KXRAY_DIR/xray.json"
   python3 - "$RENDERED/templates/reference/exit-xray.json.tmpl" "$KXRAY_DIR/xray.json" <<'P'
@@ -73,7 +106,14 @@ P
   if [ "${CTL_MODE:-tunnel}" = tunnel ]; then   # control link: portal + local-only entry on our OWN xray
     python3 "$KIT_ROOT/ctl/gen_ctl.py" "$RENDERED/templates/iran-core.json.tmpl" "$KXRAY_DIR/xray.json" "$KXRAY_DIR/iran-ctl.json"
   fi
-  XR=$(command -v xray || echo /root/.pg_nodes/bin/xray); "$XR" run -test -c "$KXRAY_DIR/xray.json" >/dev/null || die "xray config test failed"
+  ensure_kxray; XR=$(kxray); [ "$SPLIT" = 1 ] && python3 - "$KXRAY_DIR/xray.json" <<'P2'
+import json,sys
+c=json.load(open(sys.argv[1]))
+for i in c['inbounds']:
+    if i['tag'].endswith('xhttp-bridge'): i['listen']='0.0.0.0'   # CDN origin, TLS by xray itself
+json.dump(c,open(sys.argv[1],'w'),indent=2)
+P2
+  "$XR" run -test -c "$KXRAY_DIR/xray.json" >/dev/null || die "xray config test failed"
   cat > /etc/systemd/system/$KXRAY_UNIT.service <<U
 [Unit]
 Description=vpn-infra-kit backhaul xray (exit side)
@@ -89,7 +129,22 @@ U
   if systemctl is-active -q $KXRAY_UNIT; then systemctl restart $KXRAY_UNIT; else systemctl start $KXRAY_UNIT; fi   # our own unit only
   # nft: scoped, commented rules; REALITY only from IRAN_IP. Inserted into the existing input chain if one drops by default.
   backup_path /etc/nftables.conf
-  if ! nft list ruleset | grep -q "vpn-infra-kit:$KIT_PREFIX"; then
+  if [ "$SPLIT" = 1 ]; then   # own table: affects ONLY the kit's ports; all other traffic/policies untouched
+    nft list table inet ${KIT_PREFIX}_exit >/dev/null 2>&1 && nft delete table inet ${KIT_PREFIX}_exit
+    nft -f - <<N
+table inet ${KIT_PREFIX}_exit {
+  chain input { type filter hook input priority -5; policy accept;
+    iif lo accept
+    ip saddr ${IRAN_IP} tcp dport { ${REALITY_PORT}, ${DIRECT_TLS_PORT} } accept
+    tcp dport { ${REALITY_PORT}, ${DIRECT_TLS_PORT} } drop comment "vpn-infra-kit:${KIT_PREFIX}"
+    ip saddr ${MASTER_IP} tcp dport ${CTL_LOCAL_PORT:-62051} accept
+    tcp dport ${CTL_LOCAL_PORT:-62051} drop comment "vpn-infra-kit:${KIT_PREFIX}-ctl"
+  }
+}
+N
+    nft list table inet ${KIT_PREFIX}_exit > /etc/nftables.d-${KIT_PREFIX}_exit.nft 2>/dev/null || true
+    warn "nft table inet ${KIT_PREFIX}_exit loaded (runtime); persist: include /etc/nftables.d-${KIT_PREFIX}_exit.nft from /etc/nftables.conf (operator review)"
+  elif ! nft list ruleset | grep -q "vpn-infra-kit:$KIT_PREFIX"; then
     fam_tab_chain=$(nft -a list ruleset | awk '/^table/{t=$2" "$3} /chain input/{print t" input"; exit}')
     if [ -n "$fam_tab_chain" ]; then
       nft insert rule $fam_tab_chain ip saddr "$IRAN_IP" tcp dport "{ ${REALITY_PORT}, ${DIRECT_TLS_PORT} }" accept comment "\"vpn-infra-kit:$KIT_PREFIX\""
@@ -100,7 +155,7 @@ U
     else log "no input chain filtering found; nothing to add"; fi
   fi
   # nginx: XHTTP on 443 via SNI/host — add a server block include, test, then RELOAD (graceful, no drop)
-  if command -v nginx >/dev/null && [ -n "${XHTTP_DOMAIN:-}" ]; then
+  if [ "$SPLIT" != 1 ] && command -v nginx >/dev/null && [ -n "${XHTTP_DOMAIN:-}" ]; then
     f=/etc/nginx/conf.d/$KIT_PREFIX-xhttp.conf; backup_path "$f"
     sed -n '/location .*XHTTP_PATH/,/^    }/p' "$RENDERED/templates/reference/nginx-exit-vpn-panel.conf" >/dev/null
     cat > "$f" <<N
@@ -230,12 +285,14 @@ sys.exit(1 if bad else 0)' || warn "some paths failing (see above)"
   systemctl --no-pager --plain list-timers 'vpn-*' | head
 }
 
-PHASES=(preflight gen exit iran ctl paths panels failover backup verify)
+PHASES=(preflight gen cert exit iran ctl paths panels failover backup verify)
 if [ $PLAN = 1 ]; then
   phase_preflight
   echo; log "PLAN (nothing applied):"
   cat <<P
+  cert     : $( [ "$SPLIT" = 1 ] && echo "acme.sh (DNS-01 via Cloudflare) -> $TLS_CERT_FILE for the CDN hostnames; auto-renew cron" || echo "skip (existing cert)")
   gen      : generate missing UUID/XHTTP path/REALITY keys/node key/backup passphrase into .env
+  split    : $( [ "$SPLIT" = 1 ] && echo "EXIT=$EXIT_IP runs kit xray+failover+backup; MASTER=$MASTER_IP gets panel objects only (node addr $EXIT_IP:${CTL_LOCAL_PORT:-62051}, nft-limited to MASTER_IP); XHTTP origin TLS on :${XHTTP_ORIGIN_PORT:-10443}" || echo off)
   exit     : new unit $KXRAY_UNIT (own xray, ports ${REALITY_PORT}/${XHTTP_BRIDGE_PORT}/${DIRECT_TLS_PORT}/${SOCKS_TEST_PORT});
              nft: insert commented accept rules (REALITY only from Iran IP); nginx: add conf.d/$KIT_PREFIX-xhttp.conf, nginx -t, reload
   iran     : copy kit scripts + units, docker pg-node ($PG_NODE_IMAGE) on :$PG_NODE_PORT

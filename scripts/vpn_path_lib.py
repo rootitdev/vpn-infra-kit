@@ -32,10 +32,10 @@ def req(method: str, path: str, env: dict, body: dict | None = None):
         raise SystemExit("missing PANEL_API_KEY")
     data = None if body is None else json.dumps(body).encode()
     r = Request(
-        f"http://127.0.0.1:8000{path}",
+        f"{(env.get('PASARGUARD_URL') or 'http://127.0.0.1:8000').rstrip('/')}{path}",
         data=data,
         method=method,
-        headers={"X-Api-Key": key, "Content-Type": "application/json"},
+        headers={"X-Api-Key": key, "Content-Type": "application/json", "User-Agent": "vpn-infra-kit/1.0"},
     )
     with urlopen(r, timeout=30) as resp:
         raw = resp.read()
