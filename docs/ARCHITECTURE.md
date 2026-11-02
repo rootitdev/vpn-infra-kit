@@ -28,3 +28,26 @@ Admin panel traffic from Iran is pinned to TO-AMS-DIRECT through the `PANEL-ADMI
 - `render_exit_configs.py` / `render_iran_configs.py` are legacy renderers (pre-REALITY, include HY2/TUIC). The source of truth is `templates/iran-core.json.tmpl` and `templates/reference/exit-xray.json.tmpl`, captured from the live system.
 - Panels (settle-web, ig-mult-web, sni-watch) are business-specific; installed only in standalone mode.
 - Bunny path currently needs a funded account; Gcore was observed unstable from some Iranian DCs — health check handles it.
+
+## Control link (panel ⇄ node) — `ctl/gen_ctl.py`
+```
+Pasarguard panel ──► CTL_NODE_ADDRESS:CTL_LOCAL_PORT  (dokodemo "${KIT_PREFIX}-ctl-in", local-only, kit Exit xray)
+                     └► reverse portal "${KIT_PREFIX}-ctl-portal" (domain ctl.${KIT_PREFIX}.internal)
+                         ◄══ tunnel (XHTTP via CDN / REALITY) ══ Iran "${KIT_PREFIX}-ctl-bridge" (dials OUT)
+                                                                   └► freedom redirect 127.0.0.1:PG_NODE_PORT (pg-node API)
+```
+- Plan: `./install.sh --plan` prints the ctl line (ports, units, nft table, which paths carry it).
+- Apply: `--phase exit` (adds portal + entry into the kit's own xray config), `--phase iran` (binds node API to 127.0.0.1, runs `ctl`),
+  or `--phase ctl` alone. `paths` registers the node on the panel with the ctl address/port.
+- Verify: `--phase verify` checks the Exit entry port listens, `${KIT_PREFIX}-ctl-bridge` is active on Iran, the node API is bound to 127.0.0.1,
+  and that `IRAN_IP:PG_NODE_PORT` is NOT reachable from outside (unless fallback). Then the panel must show node `${KIT_PREFIX}-iran` connected.
+- Rollback: `./rollback.sh --ctl --yes` (stops the bridge, removes the nft table). To go back to direct quickly: set `CTL_MODE=direct`,
+  rerun `--phase iran` (node API rebinds to 0.0.0.0, nft allows only EXIT_IP) and update the node address in the panel.
+- The control link uses a balancer of its own (leastPing over `CTL_PATHS`) and is independent of the user-traffic failover selector.
+- Docker note: if the panel container is not on host networking, `127.0.0.1` inside it is the container itself. Set
+  `CTL_LISTEN` and `CTL_NODE_ADDRESS` to the docker bridge gateway (e.g. 172.17.0.1); that address is not routable from outside.
+
+## Mode compatibility
+Standalone and master use identical Iran-side components, health, failover, backup and control link.
+Master-only: `master/pg_master.py` (add-only API), prefixed inbound tags (`INBOUND_PREFIX`), panels skipped by default,
+CDN-first default priority. Standalone-only: Pasarguard bootstrap (`pg_bootstrap_panel.py`) and the business panels.

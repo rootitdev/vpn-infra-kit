@@ -9,7 +9,29 @@ BACKUP_DIR="$STATE_DIR/backups/$TS"
 log(){ printf '\033[1;34m[kit]\033[0m %s\n' "$*"; }
 warn(){ printf '\033[1;33m[warn]\033[0m %s\n' "$*" >&2; }
 die(){ printf '\033[1;31m[fail]\033[0m %s\n' "$*" >&2; exit 1; }
-load_env(){ [ -f "$ENV_FILE" ] || die "missing $ENV_FILE (copy .env.example)"; [ "$(stat -c %a "$ENV_FILE")" = 600 ] || chmod 600 "$ENV_FILE"; set -a; . "$ENV_FILE"; set +a; }
+load_env(){ [ -f "$ENV_FILE" ] || die "missing $ENV_FILE (copy .env.example)"; [ "$(stat -c %a "$ENV_FILE")" = 600 ] || chmod 600 "$ENV_FILE"; set -a; . "$ENV_FILE"; set +a; target_guard; }
+# ---- target-IP guard -------------------------------------------------------
+# Refuse to operate on any IP listed in a local deny file (one IP or CIDR per line, '#' comments).
+# Put YOUR OWN existing production servers there so this kit can never be pointed at them by mistake.
+# Searched: $TARGET_DENY_FILE, /root/.vpn-secrets/target-deny.txt, $KIT_ROOT/.target-deny (gitignored).
+target_guard(){
+  local f files=("${TARGET_DENY_FILE:-}" /root/.vpn-secrets/target-deny.txt "$KIT_ROOT/.target-deny")
+  for f in "${files[@]}"; do [ -n "$f" ] && [ -f "$f" ] || continue
+    python3 - "$f" "${EXIT_IP:-}" "${IRAN_IP:-}" <<'P' || die "TARGET GUARD: EXIT_IP/IRAN_IP matches an entry in the deny file — refusing to run"
+import ipaddress,sys
+nets=[]
+for l in open(sys.argv[1]):
+    l=l.split('#')[0].strip()
+    if l:
+        try: nets.append(ipaddress.ip_network(l,strict=False))
+        except ValueError: pass
+for ip in sys.argv[2:]:
+    if not ip: continue
+    try: a=ipaddress.ip_address(ip)
+    except ValueError: continue
+    if any(a in n for n in nets): sys.exit(1)
+P
+  done; }
 need(){ for v in "$@"; do [ -n "${!v:-}" ] || die "required variable $v is empty in .env"; done; }
 set_env(){ # set_env KEY VALUE  (writes without printing)
   local k="$1" v="$2"; if grep -q "^$k=" "$ENV_FILE"; then python3 - "$ENV_FILE" "$k" "$v" <<'P'
@@ -18,6 +40,7 @@ P
   else echo "$k=$v" >> "$ENV_FILE"; fi; export "$k=$v"; }
 _ssh_opts(){ echo "-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=10"; }
 on_iran(){ # run a command on Iran
+  target_guard
   if [ -n "${IRAN_SSH_KEY_FILE:-}" ]; then ssh $(_ssh_opts) -i "$IRAN_SSH_KEY_FILE" -p "$IRAN_SSH_PORT" "$IRAN_SSH_USER@$IRAN_IP" "$@";
   else SSHPASS="$IRAN_SSH_PASSWORD" sshpass -e ssh $(_ssh_opts) -p "$IRAN_SSH_PORT" "$IRAN_SSH_USER@$IRAN_IP" "$@"; fi; }
 to_iran(){ # to_iran localpath remotepath

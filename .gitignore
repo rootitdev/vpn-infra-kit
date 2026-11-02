@@ -11,3 +11,4 @@ state/
 backups/
 rendered/
 .scan-deny
+.target-deny

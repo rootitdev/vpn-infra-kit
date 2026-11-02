@@ -13,7 +13,8 @@ while [ $# -gt 0 ]; do case "$1" in
   --phase) PHASE="$2"; PLAN=0; shift;; --all) ALL=1; PLAN=0;; --plan) PLAN=1;; --yes) ASSUME_YES=1;;
   *) die "unknown arg $1";; esac; shift; done
 load_env
-MODE="${INSTALL_MODE:-master}"; [ "$MODE" = master ] && export INBOUND_PREFIX="${KIT_PREFIX}-"
+MODE="${INSTALL_MODE:-}"; case "$MODE" in standalone|master) ;; *) die "set INSTALL_MODE=standalone or master in .env";; esac
+[ "$MODE" = master ] && export INBOUND_PREFIX="${KIT_PREFIX}-"
 RENDERED=/opt/vpn-infra-kit/rendered; export KIT_RENDERED=$RENDERED
 KXRAY_DIR=/opt/vpn-infra-kit/exit; KXRAY_UNIT="${KIT_PREFIX}-exit-xray"
 mkdir -p "$STATE_DIR"; chmod 700 "$STATE_DIR"
@@ -63,6 +64,9 @@ for i in c['inbounds']:
 if not os.environ.get('WARP_PRIVATE_KEY'): c['outbounds']=[o for o in c['outbounds'] if o.get('tag')!='WARP']
 json.dump(c,open(sys.argv[2],'w'),indent=2); os.chmod(sys.argv[2],0o600)
 P
+  if [ "${CTL_MODE:-tunnel}" = tunnel ]; then   # control link: portal + local-only entry on our OWN xray
+    python3 "$KIT_ROOT/ctl/gen_ctl.py" "$RENDERED/templates/iran-core.json.tmpl" "$KXRAY_DIR/xray.json" "$KXRAY_DIR/iran-ctl.json"
+  fi
   XR=$(command -v xray || echo /root/.pg_nodes/bin/xray); "$XR" run -test -c "$KXRAY_DIR/xray.json" >/dev/null || die "xray config test failed"
   cat > /etc/systemd/system/$KXRAY_UNIT.service <<U
 [Unit]
@@ -122,11 +126,49 @@ phase_iran(){
 API_KEY=$PG_NODE_API_KEY
 SERVICE_PORT=$PG_NODE_PORT
 SERVICE_PROTOCOL=grpc
+NODE_HOST=$( [ "${CTL_MODE:-tunnel}" = tunnel ] && [ "${CTL_DIRECT_FALLBACK:-0}" != 1 ] && echo 127.0.0.1 || echo 0.0.0.0 )
 SSL_CERT_FILE=/root/.pg_nodes/certs/fullchain.pem
 SSL_KEY_FILE=/root/.pg_nodes/certs/privkey.pem
 X
 chmod 600 /etc/default/pg-node; docker image inspect $PG_NODE_IMAGE >/dev/null 2>&1 || docker pull $PG_NODE_IMAGE"
   on_iran "systemctl daemon-reload; systemctl enable -q pg-node && (systemctl is-active -q pg-node || systemctl start pg-node)"
+  phase_ctl
+}
+
+# Panel<->node control link. tunnel: Iran ctl-bridge xray dials out through XHTTP/REALITY to the Exit portal.
+# Node API port on Iran is never reachable from the Internet except (optional fallback) from EXIT_IP.
+phase_ctl(){
+  log "control link: CTL_MODE=${CTL_MODE:-tunnel} fallback=${CTL_DIRECT_FALLBACK:-0}"
+  iran_backup /etc/nftables.conf
+  # Iran firewall for the node API port: loopback always; EXIT_IP only when direct/fallback; everyone else dropped
+  on_iran "nft list table inet ${KIT_PREFIX}_ctl >/dev/null 2>&1 && nft delete table inet ${KIT_PREFIX}_ctl; nft -f - <<N
+table inet ${KIT_PREFIX}_ctl {
+  chain input { type filter hook input priority -10; policy accept;
+    iif lo tcp dport ${PG_NODE_PORT} accept
+    $( { [ "${CTL_MODE:-tunnel}" = direct ] || [ "${CTL_DIRECT_FALLBACK:-0}" = 1 ]; } && echo "ip saddr ${EXIT_IP} tcp dport ${PG_NODE_PORT} accept" )
+    tcp dport ${PG_NODE_PORT} drop comment \"vpn-infra-kit:${KIT_PREFIX}-nodeapi-guard\"
+  }
+}
+N"
+  [ "${CTL_MODE:-tunnel}" = tunnel ] || { log "direct control link: panel -> ${IRAN_IP}:${PG_NODE_PORT} (EXIT_IP only)"; return; }
+  [ -f "$KXRAY_DIR/iran-ctl.json" ] || die "run --phase exit first (generates iran-ctl.json)"
+  on_iran "mkdir -p /opt/vpn-infra-kit && chmod 700 /opt/vpn-infra-kit"
+  to_iran "$KXRAY_DIR/iran-ctl.json" /opt/vpn-infra-kit/ctl.json
+  on_iran "XR=\$(command -v xray || ls /usr/local/bin/xray /root/.pg_nodes/bin/xray 2>/dev/null | head -1); [ -n \"\$XR\" ] || (bash -c \"\$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)\" @ install && XR=/usr/local/bin/xray)
+chmod 600 /opt/vpn-infra-kit/ctl.json; \$XR run -test -c /opt/vpn-infra-kit/ctl.json >/dev/null
+cat > /etc/systemd/system/${KIT_PREFIX}-ctl-bridge.service <<U
+[Unit]
+Description=vpn-infra-kit control-link reverse bridge (panel<->node via tunnel)
+After=network-online.target pg-node.service
+[Service]
+ExecStart=\$XR run -c /opt/vpn-infra-kit/ctl.json
+Restart=always
+RestartSec=3
+[Install]
+WantedBy=multi-user.target
+U
+systemctl daemon-reload; systemctl enable -q ${KIT_PREFIX}-ctl-bridge; systemctl restart ${KIT_PREFIX}-ctl-bridge"
+  log "panel must use node address ${CTL_NODE_ADDRESS:-127.0.0.1}:${CTL_LOCAL_PORT:-62051}"
 }
 
 phase_paths(){
@@ -174,10 +216,15 @@ for t,v in (d.get("paths") or d).items():
 sys.exit(1 if bad else 0)' || warn "some paths failing (see above)"
   on_iran "curl -s -o /dev/null -w 'tunnel %{http_code} %{time_total}s\n' -x socks5h://127.0.0.1:11080 https://www.gstatic.com/generate_204" || warn "end-to-end tunnel test failed"
   [ "$MODE" = master ] && { python3 "$KIT_ROOT/master/pg_master.py" plan | grep -E "untouched|BLOCK" ; }
+  if [ "${CTL_MODE:-tunnel}" = tunnel ]; then
+    timeout 5 bash -c "</dev/tcp/${CTL_LISTEN:-127.0.0.1}/${CTL_LOCAL_PORT:-62051}" && log "ctl entry ${CTL_LOCAL_PORT} open on Exit" || warn "ctl entry port not listening"
+    on_iran "systemctl is-active ${KIT_PREFIX}-ctl-bridge; ss -Hltn 'sport = :${PG_NODE_PORT}' | awk '{print \$4}'" | sed 's/^/  iran: /'
+  fi
+  log "external exposure check of node API (must be closed unless fallback):"; timeout 5 bash -c "</dev/tcp/${IRAN_IP}/${PG_NODE_PORT}" 2>/dev/null && echo "  ${PG_NODE_PORT} reachable from Exit (expected only with fallback/direct)" || echo "  ${PG_NODE_PORT} closed from Exit"
   systemctl --no-pager --plain list-timers 'vpn-*' | head
 }
 
-PHASES=(preflight gen exit iran paths panels failover backup verify)
+PHASES=(preflight gen exit iran ctl paths panels failover backup verify)
 if [ $PLAN = 1 ]; then
   phase_preflight
   echo; log "PLAN (nothing applied):"
@@ -186,9 +233,10 @@ if [ $PLAN = 1 ]; then
   exit     : new unit $KXRAY_UNIT (own xray, ports ${REALITY_PORT}/${XHTTP_BRIDGE_PORT}/${DIRECT_TLS_PORT}/${SOCKS_TEST_PORT});
              nft: insert commented accept rules (REALITY only from Iran IP); nginx: add conf.d/$KIT_PREFIX-xhttp.conf, nginx -t, reload
   iran     : copy kit scripts + units, docker pg-node ($PG_NODE_IMAGE) on :$PG_NODE_PORT
+  ctl      : CTL_MODE=${CTL_MODE:-tunnel}: $( [ "${CTL_MODE:-tunnel}" = tunnel ] && echo "Exit portal ${KIT_PREFIX}-ctl-portal + local entry ${CTL_LISTEN:-127.0.0.1}:${CTL_LOCAL_PORT:-62051}; Iran unit ${KIT_PREFIX}-ctl-bridge via ${CTL_PATHS:-TO-AMS-XHTTP,TO-AMS-REALITY}; node API bound 127.0.0.1" || echo "direct") ; Iran nft table ${KIT_PREFIX}_ctl: node port lo$( { [ "${CTL_MODE:-tunnel}" = direct ] || [ "${CTL_DIRECT_FALLBACK:-0}" = 1 ]; } && echo " + EXIT_IP") only
   paths    : $( [ "$MODE" = master ] && echo "Pasarguard ADD-ONLY: core '${KIT_PREFIX}-iran-core', node '${KIT_PREFIX}-iran', hosts '${KIT_PREFIX}-*'" || echo "bootstrap own panel entities" )
   panels   : $( [ "$MODE" = master ] && echo "skipped" || echo "path-web, settle-web, ig-mult-web, sni-watch" )
-  failover : vpn-health/vpn-failover timers; priority REALITY > XHTTP > GCORE > BUNNY > CF > DIRECT; CFORANGE watch-only
+  failover : vpn-health/vpn-failover timers; priority: $(PYTHONPATH="$KIT_ROOT/scripts" python3 -c 'import vpn_paths as v;print(" > ".join(v.PRIORITY))'); CFORANGE watch-only
   backup   : daily GPG(AES256) archive to Telegram
   verify   : 204 through every path + end-to-end
 P

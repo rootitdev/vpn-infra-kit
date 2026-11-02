@@ -64,7 +64,8 @@ def desired():
     core_cfg = json.loads((RENDER / "templates" / "iran-core.json.tmpl").read_text())  # produced by render_iran_configs.py
     return {
         "core": {"name": f"{PREFIX}-iran-core", "config": core_cfg, "exclude_inbound_tags": [], "fallbacks_inbound_tags": []},
-        "node": {"name": f"{PREFIX}-iran", "address": ENV["IRAN_IP"], "port": int(ENV.get("PG_NODE_PORT", "62050")),
+        "node": {"name": f"{PREFIX}-iran", "address": (ENV.get("CTL_NODE_ADDRESS", "127.0.0.1") if ENV.get("CTL_MODE", "tunnel") == "tunnel" else ENV["IRAN_IP"]),
+                  "port": int(ENV.get("CTL_LOCAL_PORT", "62051") if ENV.get("CTL_MODE", "tunnel") == "tunnel" else ENV.get("PG_NODE_PORT", "62050")),
                   "api_key": ENV["PG_NODE_API_KEY"], "connection_type": "grpc", "usage_coefficient": 1.0},
         "inbound_tags": [i.get("tag") for i in core_cfg.get("inbounds", []) if i.get("tag")],
     }
@@ -75,7 +76,8 @@ def plan(tok):
     if d["core"]["name"] in names["cores"]: problems.append(f"core name exists: {d['core']['name']}")
     if d["node"]["name"] in names["nodes"]: problems.append(f"node name exists: {d['node']['name']}")
     for n in existing["nodes"]:
-        if n.get("address") == d["node"]["address"]: problems.append("a node with IRAN_IP already exists on master")
+        if n.get("address") == d["node"]["address"] and str(n.get("port")) == str(d["node"]["port"]):
+            problems.append(f"a node already uses {d['node']['address']}:{d['node']['port']} on master (pick another CTL_LOCAL_PORT)")
     try: tags = set(_req("GET", "/api/inbounds", tok) or [])
     except Exception: tags = set()
     for t in d["inbound_tags"]:
