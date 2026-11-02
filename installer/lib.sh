@@ -43,6 +43,10 @@ on_iran(){ # run a command on Iran
   target_guard
   if [ -n "${IRAN_SSH_KEY_FILE:-}" ]; then ssh $(_ssh_opts) -i "$IRAN_SSH_KEY_FILE" -p "$IRAN_SSH_PORT" "$IRAN_SSH_USER@$IRAN_IP" "$@";
   else SSHPASS="$IRAN_SSH_PASSWORD" sshpass -e ssh $(_ssh_opts) -p "$IRAN_SSH_PORT" "$IRAN_SSH_USER@$IRAN_IP" "$@"; fi; }
+on_master(){ # run a command on the Pasarguard master (split mode; MASTER_SSH_* in .env)
+  target_guard
+  if [ -n "${MASTER_SSH_KEY_FILE:-}" ]; then ssh $(_ssh_opts) -i "$MASTER_SSH_KEY_FILE" -p "${MASTER_SSH_PORT:-22}" "${MASTER_SSH_USER:-root}@$MASTER_IP" "$@";
+  else SSHPASS="$MASTER_SSH_PASSWORD" sshpass -e ssh $(_ssh_opts) -p "${MASTER_SSH_PORT:-22}" "${MASTER_SSH_USER:-root}@$MASTER_IP" "$@"; fi; }
 to_iran(){ # to_iran localpath remotepath   ("dir/." copies the directory CONTENTS, via tar; modern scp rejects ".")
   target_guard
   if [[ "$1" == */. ]]; then tar -C "${1%/.}" -cf - . | on_iran "mkdir -p '$2' && tar -C '$2' -xf - --no-same-owner"; return; fi

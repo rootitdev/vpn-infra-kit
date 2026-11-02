@@ -81,6 +81,11 @@ If the panel runs in docker without host networking, set `CTL_LISTEN`/`CTL_NODE_
         tell me where it is stored. In split mode it runs on the Exit over HTTPS on `PATH_WEB_PORT` (default 8790) behind a
         CF-proxied hostname + Origin Rule to that port; nft allows only Cloudflare edge IPs to that port.
      3. "Install the Sales web panel?" → `INSTALL_PANEL_SALES=1` (master mode: warn it sells on the shared master panel).
+   - **M. Telegram backup:** "Install the daily encrypted Telegram backup?" → `INSTALL_BACKUP=1/0`. If yes ask:
+     bot token (`TELEGRAM_BOT_TOKEN`, secret form), chat id (`TELEGRAM_CHAT_ID`; remind me to /start the bot first),
+     backup time (`BACKUP_TIME`, default 04:00 Tehran), retention days for local archives (`BACKUP_RETENTION_DAYS`, default 14).
+     A separate GPG passphrase (`BACKUP_GPG_PASS`) is generated on EACH server inside its `/root/.vpn-secrets/.env` —
+     never show it; tell me to copy each one offline. After phase `backup`, run one test per server and confirm sendDocument `ok:true`.
    Auto-generated (never ask): REALITY keys, UUIDs, XHTTP path, node API key, backup passphrase, panel passwords.
    Write everything to `/root/.vpn-secrets/.env` (600) following `.env.example`; never display the file.
 2. Copy the repo to the Exit/master at `/opt/vpn-infra-kit`, write the `.env` there (600) with `INSTALL_MODE` set to my answer,

@@ -9,6 +9,7 @@
 #                       from BACKUP_PG_ENVFILE, default /opt/pasarguard/.env)
 #   BACKUP_TG_PROXY     optional proxy for Telegram (e.g. socks5h://127.0.0.1:11080 on an Iran node where
 #                       api.telegram.org is filtered); direct is tried first, then this proxy
+#   BACKUP_RETENTION_DAYS  delete local RoOtIt-*.tar.gz.gpg* archives in /root/RoOtIt-backups older than N days (default 14; 0 = keep all)
 #   BACKUP_KEEP_LOCAL   optional: prune local archives beyond N newest (unset = keep all, nothing deleted)
 # Nothing is restarted. Secrets only ever exist inside the GPG archive.
 set -euo pipefail
@@ -67,5 +68,9 @@ for f in "${PARTS[@]}"; do
 done
 if [ -n "${BACKUP_KEEP_LOCAL:-}" ]; then KEEP=$BACKUP_KEEP_LOCAL
 ls -1t "$DEST"/RoOtIt-"$LABEL"-*.gpg 2>/dev/null | tail -n +$((KEEP+1)) | xargs -r rm -f
+fi
+RD="${BACKUP_RETENTION_DAYS:-14}"
+if [ "$RD" -gt 0 ] 2>/dev/null; then
+  find "$DEST" -maxdepth 1 -type f -name 'RoOtIt-*.tar.gz.gpg*' -mtime +"$RD" -print -delete | sed 's/^/[RoOtIt-backup] retention removed: /' >&2 || true
 fi
 exit $FAIL

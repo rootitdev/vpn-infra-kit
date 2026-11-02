@@ -359,12 +359,35 @@ phase_failover(){
   systemctl daemon-reload; systemctl enable --now -q vpn-health.timer vpn-failover.timer
 }
 
-phase_backup(){
-  need TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID BACKUP_PASSPHRASE
-  render_tree "$RENDERED"; backup_path /root/vpn-infra/scripts/backup-stack.sh
-  install -m 755 "$RENDERED/scripts/backup-stack.sh" /root/vpn-infra/scripts/backup-stack.sh
-  for u in vpn-backup.service vpn-backup.timer; do install -m 644 "$RENDERED/systemd/exit/$u" /etc/systemd/system/$u; done
-  systemctl daemon-reload; systemctl enable --now -q vpn-backup.timer; log "backup timer enabled (first run: systemctl start vpn-backup.service)"
+phase_backup(){ # RoOtIt-backup on every host (docs/BACKUP.md). Setup answers: INSTALL_BACKUP, TELEGRAM_*, BACKUP_TIME, BACKUP_RETENTION_DAYS
+  [ "${INSTALL_BACKUP:-1}" = 1 ] || { log "backup: not requested"; return 0; }
+  need TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID
+  local t="${BACKUP_TIME:-04:00}" rd="${BACKUP_RETENTION_DAYS:-14}" pfx="${KIT_PREFIX:-RoOtIt}"
+  local exit_paths="/root/.vpn-secrets /root/vpn-infra /opt/vpn-infra-kit /usr/local/lib/path-web /etc/path-web /root/.acme.sh /root/.pg_nodes/certs /var/lib/pasarguard /etc/systemd/system/${pfx}-exit-xray.service /etc/systemd/system/path-web.service /etc/nftables.conf /etc/nftables.d-${pfx}_exit.nft /etc/nftables.d-${pfx}_panel.nft /etc/nginx"
+  local iran_paths="/root/.vpn-secrets /opt/vpn-infra-kit /var/lib/pg-node /etc/systemd/system/pg-node.service /etc/systemd/system/${pfx}-ctl-bridge.service /etc/nftables.conf /etc/nftables.d-${pfx}_ctl.nft /usr/local/bin/xray /etc/hosts"
+  local master_paths="/root/.vpn-secrets /opt/pasarguard/.env /opt/pasarguard/docker-compose.yml /var/lib/pasarguard /etc/nginx"
+  # bkp_install <runner> <label> <paths> <timer-offset-min> [extra env lines]; passphrase is generated ON the host, never leaves it
+  bkp_install(){ local run="$1" label="$2" paths="$3" off="$4" extra="${5:-}" hh mm
+    hh=${t%%:*}; mm=$(( ${t##*:} + off )); hh=$(( 10#$hh + mm/60 )); mm=$((mm%60)); hh=$((hh%24))
+    { printf 'TELEGRAM_BOT_TOKEN=%q\nTELEGRAM_CHAT_ID=%q\nBACKUP_LABEL=%q\nBACKUP_PATHS=%q\nBACKUP_RETENTION_DAYS=%q\n' \
+        "$TELEGRAM_BOT_TOKEN" "$TELEGRAM_CHAT_ID" "$label" "$paths" "$rd"; [ -n "$extra" ] && printf '%s\n' "$extra"; true; } > "$TMPB/cfg"
+    cat "$TMPB/cfg" | $run 'set -e; umask 077; command -v gpg-agent >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y -q gpg-agent >/dev/null
+      install -d -m 700 /root/.vpn-secrets; E=/root/.vpn-secrets/.env; touch $E; cp -a $E $E.bak-$(date +%s)
+      N=$(mktemp); cat > $N; for k in $(cut -d= -f1 $N); do sed -i "/^$k=/d" $E; done; cat $N >> $E; rm -f $N
+      grep -q "^BACKUP_GPG_PASS=" $E || echo "BACKUP_GPG_PASS=$(openssl rand -base64 33 | tr -d "\n=+/")" >> $E; chmod 600 $E'
+    $run 'cat > /usr/local/sbin/RoOtIt-backup.sh; chmod 700 /usr/local/sbin/RoOtIt-backup.sh' < "$KIT_ROOT/scripts/rootit-backup.sh"
+    $run 'cat > /etc/systemd/system/RoOtIt-backup.service' < "$KIT_ROOT/systemd/common/RoOtIt-backup.service"
+    sed "s/04:00:00/$(printf %02d:%02d $hh $mm):00/" "$KIT_ROOT/systemd/common/RoOtIt-backup.timer" | $run 'cat > /etc/systemd/system/RoOtIt-backup.timer; systemctl daemon-reload; systemctl enable --now -q RoOtIt-backup.timer'
+    log "backup: $label daily $(printf %02d:%02d $hh $mm) Asia/Tehran, retention ${rd}d"; }
+  local_run(){ bash -c "$1"; }
+  TMPB=$(mktemp -d); trap 'rm -rf "$TMPB"' RETURN
+  bkp_install local_run "Exit-${EXIT_IP:-$(hostname -s)}" "$exit_paths" 10 "BACKUP_EXCLUDES='opt/vpn-infra-kit/exit/bin/xray opt/vpn-infra-kit/exit/bin/geo*.dat'"
+  bkp_install on_iran "Iran-$IRAN_IP" "$iran_paths" 0 "BACKUP_TG_PROXY='socks5h://127.0.0.1:${SOCKS_TEST_PORT:-11080}'"   # Telegram is filtered in Iran
+  if [ "$SPLIT" = 1 ] && [ -n "${MASTER_IP:-}" ] && { [ -n "${MASTER_SSH_PASSWORD:-}" ] || [ -n "${MASTER_SSH_KEY_FILE:-}" ]; }; then
+    bkp_install on_master "Master-$MASTER_IP" "$master_paths" 20 "BACKUP_PG_CONTAINER='${BACKUP_PG_CONTAINER:-pasarguard-timescaledb-1}'"   # read-only pg_dump, no restarts
+  else log "backup: master not backed up (non-split or no MASTER_SSH_*)"; fi
+  log "test now on each host: systemctl start RoOtIt-backup.service; journalctl -u RoOtIt-backup -n 20"
+  log "each host's BACKUP_GPG_PASS is in its /root/.vpn-secrets/.env — copy them OFFLINE"
 }
 
 phase_verify(){
@@ -400,7 +423,7 @@ if [ $PLAN = 1 ]; then
   paths    : $( [ "$MODE" = master ] && echo "Pasarguard ADD-ONLY: core '${KIT_PREFIX}-iran-core', node '${KIT_PREFIX}-iran', hosts '${KIT_PREFIX}-*'" || echo "bootstrap own panel entities" )
   panels   : failover(path-web)=${INSTALL_PANEL_FAILOVER:-0} ig=${INSTALL_PANEL_IG:-0} sales=${INSTALL_PANEL_SALES:-0}$( [ "$SPLIT" = 1 ] && echo " (split: HTTPS :${PATH_WEB_PORT:-8790} on ${PATH_WEB_DOMAIN:-?}, CF-only)" )
   failover : vpn-health/vpn-failover timers; priority: $(PYTHONPATH="$KIT_ROOT/scripts" python3 -c 'import vpn_paths as v;print(" > ".join(v.PRIORITY))'); CFORANGE watch-only
-  backup   : daily GPG(AES256) archive to Telegram
+  backup   : INSTALL_BACKUP=${INSTALL_BACKUP:-1}: RoOtIt-backup timer on Iran/Exit(/Master) daily ${BACKUP_TIME:-04:00} Tehran, GPG(AES256) -> Telegram, retention ${BACKUP_RETENTION_DAYS:-14}d
   verify   : 204 through every path + end-to-end
 P
   [ "$MODE" = master ] && python3 "$KIT_ROOT/master/pg_master.py" plan || true
