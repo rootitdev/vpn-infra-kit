@@ -1,0 +1,8 @@
+[Unit]
+Description=RoOtIt encrypted backup to Telegram
+After=network-online.target
+[Service]
+Type=oneshot
+Nice=10
+IOSchedulingClass=idle
+ExecStart=/usr/local/sbin/RoOtIt-backup.sh

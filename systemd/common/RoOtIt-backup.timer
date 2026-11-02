@@ -1,0 +1,8 @@
+[Unit]
+Description=Daily RoOtIt backup
+[Timer]
+OnCalendar=*-*-* 04:00:00 Asia/Tehran
+RandomizedDelaySec=300
+Persistent=true
+[Install]
+WantedBy=timers.target
