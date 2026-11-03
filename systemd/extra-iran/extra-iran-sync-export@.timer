@@ -1,0 +1,8 @@
+[Unit]
+Description=Extra Iran node %i: sync-export timer
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=10s
+AccuracySec=2s
+[Install]
+WantedBy=timers.target

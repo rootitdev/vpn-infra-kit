@@ -1,0 +1,7 @@
+[Unit]
+Description=Extra Iran node %i: sync-export
+After=docker.service
+[Service]
+Type=oneshot
+EnvironmentFile=/root/.vpn-secrets/extra-iran-%i.env
+ExecStart=/usr/bin/python3 /root/vpn-infra/scripts/extra_iran_sync_export.py

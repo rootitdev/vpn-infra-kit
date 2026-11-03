@@ -1,0 +1,8 @@
+[Unit]
+Description=Extra Iran node %i: stats timer
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=30s
+AccuracySec=2s
+[Install]
+WantedBy=timers.target
