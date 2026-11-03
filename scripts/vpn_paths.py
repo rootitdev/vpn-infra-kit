@@ -11,11 +11,11 @@ import os as _os
 
 # Mode-specific default failover order (override with PATH_PRIORITY in .env, comma-separated tags or short names).
 DEFAULT_PRIORITY = {
-    "standalone": ["TO-AMS-REALITY", "TO-AMS-GCORE", "TO-AMS-BUNNY", "TO-AMS-XHTTP", "TO-AMS-CF", "TO-AMS-DIRECT"],
+    "standalone": ["TO-AMS-REALITY", "TO-AMS-SSH", "TO-AMS-GCORE", "TO-AMS-BUNNY", "TO-AMS-XHTTP", "TO-AMS-CF", "TO-AMS-DIRECT"],
     # master: CDN-first so the shared master's IP is exposed as little as possible
     "master": ["TO-AMS-XHTTP", "TO-AMS-GCORE", "TO-AMS-CF", "TO-AMS-REALITY", "TO-AMS-DIRECT"],
 }
-_SHORT = {"reality": "TO-AMS-REALITY", "xhttp": "TO-AMS-XHTTP", "gcore": "TO-AMS-GCORE", "bunny": "TO-AMS-BUNNY",
+_SHORT = {"reality": "TO-AMS-REALITY", "ssh": "TO-AMS-SSH", "xhttp": "TO-AMS-XHTTP", "gcore": "TO-AMS-GCORE", "bunny": "TO-AMS-BUNNY",
           "cf": "TO-AMS-CF", "direct": "TO-AMS-DIRECT", "cforange": "TO-AMS-CFORANGE"}
 
 
@@ -52,6 +52,7 @@ MAP = {
     "auto": list(PRIORITY),
     "direct": ["TO-AMS-DIRECT"],
     "reality": ["TO-AMS-REALITY"],
+    "ssh": ["TO-AMS-SSH"],
     "xhttp": ["TO-AMS-XHTTP"],
     "gcore": ["TO-AMS-GCORE"],
     "bunny": ["TO-AMS-BUNNY"],

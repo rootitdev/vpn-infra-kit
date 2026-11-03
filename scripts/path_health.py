@@ -319,11 +319,11 @@ def cforange_tunnel_probe(edge: dict) -> dict:
 # ---- Real-traffic probes: one temp xray, one socks port per backhaul outbound ----
 GENERATED = Path("/var/lib/pg-node/generated/xray.json")
 ALL_CACHE = Path("/var/lib/pg-node/sync/tunnel-probe.json")
-ALL_CACHE_SEC = 30
+ALL_CACHE_SEC = 45
 ALL_BASE_PORT = 18100
 PROBE_URL = "https://www.gstatic.com/generate_204"
 PROBE_TAGS = [
-    "TO-AMS-REALITY", "TO-AMS-XHTTP", "TO-AMS-GCORE", "TO-AMS-BUNNY",
+    "TO-AMS-REALITY", "TO-AMS-SSH", "TO-AMS-XHTTP", "TO-AMS-GCORE", "TO-AMS-BUNNY",
     "TO-AMS-CF", "TO-AMS-DIRECT", "TO-AMS-CFORANGE",
 ]
 
@@ -336,6 +336,45 @@ def _outbound(tag: str) -> dict | None:
     except (OSError, ValueError):
         pass
     return _outbound_from_state(tag)
+
+
+# Throughput gate: Iran DPI lets small flows (204) through but stalls long ones after ~15KB.
+THRU_URLS = ["https://speed.cloudflare.com/__down?bytes=1000000", "https://proof.ovh.net/files/1Mb.dat"]
+THRU_MIN_BPS = 125000  # 1 Mbit/s
+THRU_MIN_BYTES = 1000000
+
+
+def thru_check(proxy: str) -> dict:
+    """1MB download through the tunnel; ok if any target reaches >= 1 Mbit/s."""
+    last = {"ok": False, "mbps": 0.0, "err": "no thru target"}
+    for u in THRU_URLS:
+        try:
+            p = subprocess.run(
+                ["curl", "-sS", "-o", "/dev/null", "-w", "%{size_download} %{speed_download}",
+                 "--connect-timeout", "8", "--max-time", "10", "--socks5-hostname", proxy, u],
+                capture_output=True, text=True, timeout=14,
+            )
+            parts = (p.stdout or "0 0").split()
+            size, bps = int(float(parts[0])), float(parts[1])
+            mbps = round(bps * 8 / 1e6, 2)
+            if size >= THRU_MIN_BYTES and bps >= THRU_MIN_BPS:
+                return {"ok": True, "mbps": mbps, "err": ""}
+            last = {"ok": False, "mbps": mbps, "err": f"thru {size}B {mbps}Mbit/s"}
+        except Exception as e:
+            last = {"ok": False, "mbps": 0.0, "err": "thru " + str(e)[:80]}
+    return last
+
+
+def _probe_full(proxy: str) -> dict:
+    r = socks_http(proxy, PROBE_URL, 12.0)
+    if not r.get("ok"):
+        return r
+    t = thru_check(proxy)
+    r["mbps"] = t["mbps"]
+    if not t["ok"]:
+        r["ok"] = False
+        r["err"] = t["err"]
+    return r
 
 
 def tunnel_probe_all(tags: list[str]) -> dict:
@@ -379,12 +418,13 @@ def tunnel_probe_all(tags: list[str]) -> dict:
             with ThreadPoolExecutor(max_workers=len(ports)) as ex:
                 futs = {}
                 for t, p in ports.items():  # stagger ~0.5s so one stall doesn't hit all paths
-                    futs[t] = ex.submit(socks_http, f"127.0.0.1:{p}", PROBE_URL, 12.0)
+                    futs[t] = ex.submit(_probe_full, f"127.0.0.1:{p}")
                     time.sleep(0.5)
                 for t, f in futs.items():
                     r = f.result()
                     ok = bool(r.get("ok"))
                     rows[t] = {"ok": ok, "ms": int(r.get("ms") or 0), "http": int(r.get("http") or 0),
+                               "mbps": float(r.get("mbps") or 0),
                                "err": "" if ok else ("tunnel: " + (r.get("err") or "fail"))[:120],
                                "tunnel": ok}
         finally:

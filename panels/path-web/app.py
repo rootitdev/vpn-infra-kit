@@ -41,6 +41,7 @@ LOCK_WAIT_SEC = 90
 PATH_INFO = {
     "TO-AMS-DIRECT": ("Direct (TLS 9443)", "مستقیم به IP آلمان. کمترین تأخیر؛ شناسایی‌پذیرتر از CDN."),
     "TO-AMS-XHTTP": ("XHTTP grey", "XHTTP روی ${XHTTP_DOMAIN_ALT} (DNS خاکستری به Exit)."),
+    "TO-AMS-SSH": ("SSH tunnel", "چند تونل SSH (SOCKS) از ایران به Exit:22 پشت haproxy؛ وقتی REALITY/DIRECT کند می‌شوند."),
     "TO-AMS-REALITY": ("REALITY", "VLESS+REALITY Vision مستقیم به Exit:8444 (SNI www.apple.com)."),
     "TO-AMS-GCORE": ("Gcore CDN", "XHTTP از لبهٔ Gcore (${GCORE_DOMAIN}) → Exit. اگر 503/SSL بود هنوز روی لبه فعال نشده."),
     "TO-AMS-BUNNY": ("Bunny CDN", "XHTTP از لبهٔ Bunny (${BUNNY_DOMAIN}) → Exit. CDN آمادهٔ failover."),

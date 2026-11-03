@@ -25,7 +25,9 @@ wait_port() {
 }
 
 log "pull $IMAGE"
-docker pull -q "$IMAGE" >/dev/null
+# Iran DCs get 403 from Docker Hub: fall back to an image preloaded via
+#   (on Exit) docker save "$IMAGE" | gzip -1 | ssh root@IRAN "gunzip | docker load"
+docker pull -q "$IMAGE" >/dev/null 2>&1 || docker image inspect "$IMAGE" >/dev/null || { log "ERROR: cannot pull $IMAGE and no local copy"; exit 3; }
 
 install -d -m 700 /opt/pg-node
 if docker inspect "$NAME" >/dev/null 2>&1; then
