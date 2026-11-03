@@ -82,6 +82,66 @@ def apply(raw: bytes) -> int:
     return status
 
 
+def _varint(b: bytes, i: int) -> tuple[int, int]:
+    v = s = 0
+    while True:
+        c = b[i]; i += 1
+        v |= (c & 0x7F) << s; s += 7
+        if not c & 0x80:
+            return v, i
+
+
+def _enc_varint(v: int) -> bytes:
+    out = bytearray()
+    while True:
+        c = v & 0x7F; v >>= 7
+        out.append(c | (0x80 if v else 0))
+        if not v:
+            return bytes(out)
+
+
+def users_from_backend(raw: bytes) -> tuple[bytes, int]:
+    """Backend.users (field 3) -> Users.users (field 1), pure wire-format copy."""
+    out = bytearray(); n = 0; i = 0
+    while i < len(raw):
+        tag, i = _varint(raw, i)
+        fn, wt = tag >> 3, tag & 7
+        if wt == 0:
+            _, i = _varint(raw, i)
+        elif wt == 2:
+            ln, i = _varint(raw, i)
+            if fn == 3:
+                out += b"\x0a" + _enc_varint(ln) + raw[i:i + ln]; n += 1
+            i += ln
+        elif wt == 5:
+            i += 4
+        elif wt == 1:
+            i += 8
+        else:
+            raise ValueError("bad wire type")
+    return bytes(out), n
+
+
+def sync_users(raw: bytes) -> None:
+    """node >= v0.5.5 keeps the running core on a same-config /start, so users must be
+    pushed explicitly (hot, no xray restart). Never sync an empty list."""
+    body, n = users_from_backend(raw)
+    if n == 0:
+        log("SYNC_USERS skip: 0 users in desired state")
+        return
+    ctx = ssl._create_unverified_context()
+    req = urllib.request.Request(
+        "https://127.0.0.1:62050/users/sync",
+        data=body,
+        method="PUT",
+        headers={"x-api-key": node_key(), "Content-Type": "application/x-protobuf"},
+    )
+    t0 = time.time()
+    with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
+        resp.read()
+        log(f"SYNC_USERS {resp.status} n={n} dt={time.time()-t0:.2f} {client_summary()}")
+
+
 def main() -> None:
     want_p = SYNC / "state.sha256"
     bin_p = SYNC / "state.bin"
@@ -106,6 +166,7 @@ def main() -> None:
             return
         reason = "hash" if have != want else "inbound_down"
         apply(raw)
+        sync_users(raw)
         applied_p.write_text(want + "\n")
         applied_p.chmod(0o600)
         log(f"applied {want[:12]} reason={reason}")
