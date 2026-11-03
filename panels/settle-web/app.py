@@ -749,7 +749,7 @@ def _public_panel_base(req_host: str = "", forwarded_proto: str = "") -> str:
     if host and "127.0.0.1" not in host and "localhost" not in host:
         proto = (forwarded_proto or "https").split(",")[0].strip() or "https"
         return f"{proto}://{host}"
-    return "https://${PANEL_DOMAIN}:2096"
+    return "https://panel.jetengine.ir:2096"
 
 
 def _panel_api_key() -> str:
@@ -1457,6 +1457,18 @@ def build_rows(admin_id: int, *, with_network: bool = True) -> dict:
         ledger.scan_admin(conn, admin_id, users, as_int=as_int)
         tracks = ledger.track_map(conn, admin_id)
         waives = ledger.pending_waive_map(conn, admin_id)
+        # Users renewed via /pay/ (usage reset): unbilled row is a recharge, not new.
+        try:
+            renewed = {
+                int(r[0])
+                for r in conn.execute(
+                    "SELECT DISTINCT user_id FROM pay_order WHERE admin_id=? AND status='paid' "
+                    "AND user_id IS NOT NULL AND detail LIKE '%مصرف قبلی ریست%'",
+                    (admin_id,),
+                )
+            }
+        except sqlite3.Error:
+            renewed = set()
     finally:
         conn.close()
 
@@ -1483,6 +1495,8 @@ def build_rows(admin_id: int, *, with_network: bool = True) -> dict:
             deleted=False,
             waive=waives.get(uid),
         )
+        if row["kind"] == "new" and uid in renewed:
+            row["kind"] = "recharge"
         if row["kind"] == "new":
             n_new += 1
         elif row["kind"] == "recharge":
