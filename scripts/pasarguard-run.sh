@@ -39,7 +39,7 @@ wait_healthy() {
 	for i in $(seq 1 90); do
 		code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/ || true)
 		if [[ "$code" =~ ^[234] ]]; then
-			python3 /root/vpn-infra/scripts/vpn-path-core.py status >/dev/null 2>&1 && return 0
+			(cd /root/vpn-infra/scripts && python3 -c "from vpn_path_lib import get_core,load_env; c=get_core(load_env()); assert c[\"config\"][\"outbounds\"]") >/dev/null 2>&1 && return 0
 		fi
 		sleep 2
 	done
