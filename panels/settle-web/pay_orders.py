@@ -762,6 +762,13 @@ def fulfill_order(
         "UPDATE pay_order SET status='paid', paid_ts=?, detail=? WHERE id=?",
         (now, detail[:400], order_id),
     )
+    if result.get("usage_reset") and order.get("user_id"):
+        # Renewal = full new pack: re-bill whole limit in the settlement ledger.
+        conn.execute(
+            "INSERT INTO ledger(admin_id, user_id, billed_bytes) VALUES(?,?,0) "
+            "ON CONFLICT(admin_id, user_id) DO UPDATE SET billed_bytes=0",
+            (int(order["admin_id"]), int(order["user_id"])),
+        )
     out = dict(conn.execute("SELECT * FROM pay_order WHERE id=?", (order_id,)).fetchone())
     out["apply"] = result
     return out
