@@ -97,14 +97,13 @@ def http_xhttp_probe(url: str, timeout: float = 8.0) -> dict:
         return {"ok": False, "ms": int((time.time() - t0) * 1000), "http": 0, "err": str(e)[:120]}
 
 
-def socks_http(proxy: str, url: str, timeout: float = 8.0) -> dict:
-    """curl through socks5h; urllib has no socks."""
+def _curl_once(proxy: str, url: str, timeout: float) -> dict:
     t0 = time.time()
     try:
         p = subprocess.run(
             [
                 "curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}",
-                "--connect-timeout", "4", "--max-time", str(int(timeout)),
+                "--connect-timeout", "8", "--max-time", str(int(timeout)),
                 "--socks5-hostname", proxy, url,
             ],
             capture_output=True,
@@ -117,6 +116,26 @@ def socks_http(proxy: str, url: str, timeout: float = 8.0) -> dict:
         return {"ok": ok, "ms": int((time.time() - t0) * 1000), "http": code, "err": err}
     except Exception as e:
         return {"ok": False, "ms": int((time.time() - t0) * 1000), "http": 0, "err": str(e)[:120]}
+
+
+# Second target is plain HTTP (no TLS inside the tunnel -> fewer false "SSL timeout").
+PROBE_URL_ALT = "http://cp.cloudflare.com/generate_204"
+
+
+def socks_http(proxy: str, url: str, timeout: float = 12.0) -> dict:
+    """curl through socks5h. Fails only if primary AND alt fail, twice (retry after 2s)."""
+    t0 = time.time()
+    r: dict = {}
+    for attempt in range(2):
+        if attempt:
+            time.sleep(2)
+        for u in (url, PROBE_URL_ALT):
+            r = _curl_once(proxy, u, max(timeout, 12.0))
+            if r.get("ok"):
+                r["ms"] = int((time.time() - t0) * 1000) if attempt else r["ms"]
+                return r
+    r["ms"] = int((time.time() - t0) * 1000)
+    return r
 
 
 def port_listen(port: int, proto: str = "tcp") -> bool:
@@ -358,7 +377,10 @@ def tunnel_probe_all(tags: list[str]) -> dict:
             time.sleep(1.2)
             from concurrent.futures import ThreadPoolExecutor
             with ThreadPoolExecutor(max_workers=len(ports)) as ex:
-                futs = {t: ex.submit(socks_http, f"127.0.0.1:{p}", PROBE_URL, 7.0) for t, p in ports.items()}
+                futs = {}
+                for t, p in ports.items():  # stagger ~0.5s so one stall doesn't hit all paths
+                    futs[t] = ex.submit(socks_http, f"127.0.0.1:{p}", PROBE_URL, 12.0)
+                    time.sleep(0.5)
                 for t, f in futs.items():
                     r = f.result()
                     ok = bool(r.get("ok"))

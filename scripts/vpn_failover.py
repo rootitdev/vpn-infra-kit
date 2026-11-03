@@ -12,7 +12,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from time import gmtime, strftime
+from time import gmtime, strftime, time as now_ts
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from vpn_path_lib import (  # noqa: E402
@@ -26,6 +26,11 @@ from vpn_path_lib import (  # noqa: E402
     write_mode,
 )
 from vpn_paths import FAIL_STREAK, FAILBACK_STREAK, PRIORITY  # noqa: E402
+
+try:
+    from vpn_paths import NEXT_OK_STREAK, SWITCH_COOLDOWN_SEC  # noqa: E402
+except ImportError:  # older vpn_paths.py
+    NEXT_OK_STREAK, SWITCH_COOLDOWN_SEC = 2, 120
 
 IRAN = "root@${IRAN_IP}"
 STATE = Path("/var/lib/pasarguard/failover-state.json")
@@ -80,6 +85,7 @@ def do_switch(env: dict, st: dict, frm: str, to: str, reason: str) -> None:
     st["current"] = to
     st["last_reason"] = reason
     st.setdefault("fail", {})[to] = 0
+    st["last_switch_ts"] = int(now_ts())
     save_state(st)
     log(f"SWITCH from={frm} to={to} reason={reason}")
     # publish() rebuilds proto; Instagram CAT-* outbounds are cloned from `to`.
@@ -132,6 +138,12 @@ def _run() -> None:
     def healthy(tag: str) -> bool:
         return bool((paths.get(tag) or {}).get("ok"))
 
+    # Consecutive-pass streak for every non-current path (next path must pass twice).
+    nxt = st.setdefault("next_ok", {})
+    for t in PRIORITY:
+        nxt[t] = int(nxt.get(t) or 0) + 1 if healthy(t) else 0
+    in_cooldown = now_ts() - int(st.get("last_switch_ts") or 0) < SWITCH_COOLDOWN_SEC
+
     if healthy(cur):
         fail[cur] = 0
         ok[cur] = int(ok.get(cur) or 0) + 1
@@ -143,7 +155,7 @@ def _run() -> None:
                 break
             if healthy(tag):
                 ok[tag] = int(ok.get(tag) or 0) + 1
-                if ok[tag] >= FAILBACK_STREAK:
+                if ok[tag] >= FAILBACK_STREAK and not in_cooldown:
                     do_switch(env, st, cur, tag, f"failback ok_streak={ok[tag]}")
                     return
             else:
@@ -164,8 +176,13 @@ def _run() -> None:
         save_state(st)
         return
 
+    if in_cooldown:
+        log(f"HOLD cooldown current={cur} fail_streak={fail[cur]}")
+        save_state(st)
+        return
+
     for tag in PRIORITY:
-        if tag == cur or not healthy(tag):
+        if tag == cur or not healthy(tag) or int(nxt.get(tag) or 0) < NEXT_OK_STREAK:
             continue
         if manual:
             write_mode("auto", by="failover", note=f"manual {cur} failed {fail[cur]}x")
@@ -174,7 +191,7 @@ def _run() -> None:
             st,
             cur,
             tag,
-            f"{cur} failed {fail[cur]}x; {tag} probe ok",
+            f"{cur} failed {fail[cur]}x; {tag} probe ok x{nxt.get(tag)}",
         )
         return
 

@@ -11,7 +11,7 @@ import os as _os
 
 # Mode-specific default failover order (override with PATH_PRIORITY in .env, comma-separated tags or short names).
 DEFAULT_PRIORITY = {
-    "standalone": ["TO-AMS-REALITY", "TO-AMS-XHTTP", "TO-AMS-GCORE", "TO-AMS-BUNNY", "TO-AMS-CF", "TO-AMS-DIRECT"],
+    "standalone": ["TO-AMS-REALITY", "TO-AMS-GCORE", "TO-AMS-BUNNY", "TO-AMS-XHTTP", "TO-AMS-CF", "TO-AMS-DIRECT"],
     # master: CDN-first so the shared master's IP is exposed as little as possible
     "master": ["TO-AMS-XHTTP", "TO-AMS-GCORE", "TO-AMS-CF", "TO-AMS-REALITY", "TO-AMS-DIRECT"],
 }
@@ -61,6 +61,9 @@ MAP = {
 FALLBACK = "TO-AMS-DIRECT"
 FAIL_STREAK = 3
 FAILBACK_STREAK = 5
+# Anti-flap: switch target must pass this many runs in a row; no switch within cooldown.
+NEXT_OK_STREAK = 2
+SWITCH_COOLDOWN_SEC = 120
 HEALTH_INTERVAL_SEC = 12
 SYNC_INTERVAL_SEC = 10
 
