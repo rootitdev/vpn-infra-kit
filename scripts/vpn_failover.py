@@ -32,7 +32,21 @@ try:
 except ImportError:  # older vpn_paths.py
     NEXT_OK_STREAK, SWITCH_COOLDOWN_SEC = 2, 120
 
-IRAN = "root@${IRAN_IP}"
+def _iran_ssh() -> str:
+    import os as _os
+
+    ip = (_os.environ.get("IRAN_IP") or "").strip()
+    if not ip:
+        try:
+            ip = (load_env().get("IRAN_IP") or "").strip()
+        except Exception:
+            ip = ""
+    if not ip:
+        ip = "193.228.90.107"  # Shetaban Iran health probe host
+    return f"root@{ip}"
+
+
+IRAN = _iran_ssh()
 STATE = Path("/var/lib/pasarguard/failover-state.json")
 LOG = Path("/var/log/vpn-path/failover.log")
 LOCK = Path("/var/lock/vpn-failover.lock")

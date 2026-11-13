@@ -475,7 +475,14 @@ def main() -> None:
         row = dict(tun.get(tag) or {"ok": False, "err": "no probe"})
         if tag in hosts and not row.get("ok"):
             # Diagnostic only: edge answer never makes a path ok.
-            e = http_xhttp_probe(f"https://{hosts[tag]}${XHTTP_PATH}/", timeout=5.0)
+            import os as _os
+
+            host = hosts[tag]
+            # Skip unsubstituted install templates like ${GCORE_DOMAIN}
+            if "$" in host or "{" in host:
+                continue
+            xhttp_path = _os.environ.get("XHTTP_PATH") or "/xhttp"
+            e = http_xhttp_probe(f"https://{host}{xhttp_path}/", timeout=5.0)
             row["edge"] = bool(e.get("ok"))
             row["edge_err"] = e.get("err", "")
         paths[tag] = row
