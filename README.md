@@ -35,6 +35,8 @@ Priority (auto failover) = `PATH_PRIORITY` or the mode default (see table above)
 | Tag | Transport | Notes |
 |---|---|---|
 | TO-AMS-REALITY | VLESS+REALITY tcp → `EXIT_IP:REALITY_PORT` | nft allows only `IRAN_IP`; SNI `REALITY_SERVER_NAME` |
+| TO-AMS-SSH | SSH SOCKS Iran→Netcup/AMS `:22` | primary SSH path (`docs/SSH-PATH.md`) |
+| TO-NL-SSH | SSH SOCKS Iran→MobinHost NL `:22` | **third path** when WaterWall + direct NL blocked |
 | TO-AMS-XHTTP | VLESS+XHTTP via `XHTTP_DOMAIN` | hides Exit IP if proxied by a CDN |
 | TO-AMS-GCORE | XHTTP via Gcore CDN (`GCORE_DOMAIN`) | optional |
 | TO-AMS-BUNNY | XHTTP via Bunny pull zone (`BUNNY_DOMAIN`) | optional; needs funded Bunny account + custom-host cert |
