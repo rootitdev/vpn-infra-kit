@@ -11,11 +11,10 @@ import os as _os
 
 # Mode-specific default failover order (override with PATH_PRIORITY in .env, comma-separated tags or short names).
 DEFAULT_PRIORITY = {
-    # SSH-NL = third path: Iran SOCKS→MobinHost when WaterWall + direct NL blocked (Netcup SSH stays TO-AMS-SSH).
+    # Germany (/path/) only: NL SSH must NOT appear in this failover list.
     "standalone": [
         "TO-AMS-REALITY",
         "TO-AMS-SSH",
-        "TO-NL-SSH",
         "TO-AMS-GCORE",
         "TO-AMS-BUNNY",
         "TO-AMS-XHTTP",
@@ -28,8 +27,6 @@ DEFAULT_PRIORITY = {
 _SHORT = {
     "reality": "TO-AMS-REALITY",
     "ssh": "TO-AMS-SSH",
-    "ssh-nl": "TO-NL-SSH",
-    "nl-ssh": "TO-NL-SSH",
     "xhttp": "TO-AMS-XHTTP",
     "gcore": "TO-AMS-GCORE",
     "bunny": "TO-AMS-BUNNY",
@@ -53,10 +50,12 @@ def _env_file_value(key: str) -> str:
 
 
 def _priority() -> list[str]:
+    # Never auto-select CF orange or NL SSH on the Germany /path/ failover.
+    blocked = {"TO-AMS-CFORANGE", "TO-NL-SSH"}
     raw = _env_file_value("PATH_PRIORITY")
     if raw:
         tags = [_SHORT.get(t.strip().lower(), t.strip()) for t in raw.split(",") if t.strip()]
-        tags = [t for t in tags if t != "TO-AMS-CFORANGE"]  # CFORANGE is never auto-selected
+        tags = [t for t in tags if t not in blocked]
         if tags:
             return tags
     return list(DEFAULT_PRIORITY.get(_env_file_value("INSTALL_MODE") or "standalone", DEFAULT_PRIORITY["standalone"]))
@@ -66,15 +65,14 @@ def _priority() -> list[str]:
 PRIORITY = _priority()
 # Probe + UI only: Cloudflare orange canary. Manual lock allowed; auto never picks it.
 WATCH_ONLY = ["TO-AMS-CFORANGE"]
-REMOVED = ["TO-AMS-HY2", "TO-AMS-TUIC"]
+# TO-NL-SSH was briefly added to Germany failover; cancelled — keep out of /path/ UI.
+REMOVED = ["TO-AMS-HY2", "TO-AMS-TUIC", "TO-NL-SSH"]
 ALL_LIVE = list(PRIORITY) + list(WATCH_ONLY)
 MAP = {
     "auto": list(PRIORITY),
     "direct": ["TO-AMS-DIRECT"],
     "reality": ["TO-AMS-REALITY"],
     "ssh": ["TO-AMS-SSH"],
-    "ssh-nl": ["TO-NL-SSH"],
-    "nl-ssh": ["TO-NL-SSH"],
     "xhttp": ["TO-AMS-XHTTP"],
     "gcore": ["TO-AMS-GCORE"],
     "bunny": ["TO-AMS-BUNNY"],
