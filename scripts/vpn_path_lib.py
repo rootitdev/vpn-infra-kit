@@ -48,16 +48,25 @@ def _auth_headers(env: dict) -> dict:
 
 
 def req(method: str, path: str, env: dict, body: dict | None = None):
-    data = None if body is None else json.dumps(body).encode()
-    r = Request(
-        f"{(env.get('PASARGUARD_URL') or 'http://127.0.0.1:8000').rstrip('/')}{path}",
-        data=data,
-        method=method,
-        headers={**_auth_headers(env), "Content-Type": "application/json", "User-Agent": "vpn-infra-kit/1.0"},
-    )
-    with urlopen(r, timeout=30) as resp:
-        raw = resp.read()
-        return json.loads(raw) if raw else {}
+    """Call panel API via curl -4 -k (avoids IPv6/SSL issues from Exit hosts)."""
+    base = (env.get("PASARGUARD_URL") or "http://127.0.0.1:8000").rstrip("/")
+    url = f"{base}{path}"
+    headers = {
+        **_auth_headers(env),
+        "Content-Type": "application/json",
+        "User-Agent": "vpn-infra-kit/1.0",
+    }
+    cmd = ["curl", "-4", "-sk", "--max-time", "30", "-X", method.upper()]
+    for hk, hv in headers.items():
+        cmd.extend(["-H", f"{hk}: {hv}"])
+    if body is not None:
+        cmd.extend(["-d", json.dumps(body)])
+    cmd.append(url)
+    cp = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
+    if cp.returncode != 0:
+        raise RuntimeError(f"panel curl failed: {(cp.stderr or cp.stdout)[:300]}")
+    raw = (cp.stdout or "").strip()
+    return json.loads(raw) if raw else {}
 
 
 def get_core(env: dict) -> dict:
